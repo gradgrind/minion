@@ -1,0 +1,517 @@
+#+++ __TITLE__   : Konfigurationselemente für Noten und Notenzeugnisse
+#+++ __MINION__  :  5.0
+#+++ __MODIFIED__: 2023-01-24
+#--------------------------------------------------------------
+
+&GRADES_I: [
+    [   [1+, 1, 1-],   "sehr gut"      ],
+    [   [2+, 2, 2-],   "gut"           ],
+    [   [3+, 3, 3-],   "befriedigend"  ],
+    [   [4+, 4, 4-],  "ausreichend"   ],
+    [   [5+, 5, 5-],   "mangelhaft"    ],
+    [   [6],         "ungenügend"    ],
+    [   [nt],        "nicht teilgenommen"],
+    [   [t],         "teilgenommen"  ],
+    [   [ne],        "nicht erteilt" ],
+    [   [nb],        "kann nicht beurteilt werden"],
+    [   [*, /],       "––––––"        ],
+],
+
+&GRADES_II: [
+    [   [15, 14, 13],  ""],
+    [   [12, 11, 10],  ""],
+    [   [09, 08, 07],  ""],
+    [   [06, 05, 04],  ""],
+    [   [03, 02, 01],  ""],
+    [   [00],        ""],
+#    [   [nt],        "nicht teilgenommen"],
+#    [   [t],         "teilgenommen"],
+#    [   [ne],        "nicht erteilt" ],
+#    [   [nb],        "kann nicht beurteilt werden"],
+    [   [*, /],       "––––––"]
+],
+
+&ABI_GRADES: [
+    [   [*],         ""],
+    [   [15, 14, 13],  ""],
+    [   [12, 11, 10],  ""],
+    [   [09, 08, 07],  ""],
+    [   [06, 05, 04],  ""],
+    [   [03, 02, 01],  ""],
+    [   [00],        ""]
+],
+
+### „Sammelfächer“
+&COMPOSITE_KUNST_I: {
+    # für 12G.R und 11G
+    TYPE:   COMPOSITE,
+    SID:    Ku_,
+    NAME:   Kunst,
+    GROUP:  A,
+    COMPONENTS: [Bb, Kbe, Kge, Mal, Mz, Pls, Sth],
+    FUNCTION:   ROUNDED_AVERAGE_I,
+},
+
+&COMPOSITE_KUNST_II: {
+    # für 12G.G
+    TYPE:   COMPOSITE,
+    SID:    Ku_,
+    NAME:   Kunst,
+    GROUP:  A,
+    COMPONENTS: [Bb, Kbe, Kge, Mal, Mz, Pls, Sth],
+    FUNCTION:   ROUNDED_AVERAGE_II,
+},
+
+&COMPOSITE_NULL: {
+    # Sonderfall: Die Noten werden für Durchschnitte, usw. nicht berücksichtigt
+    TYPE:   COMPOSITE,
+    SID:    _,
+    NAME:   "",
+    GROUP:  "",
+    COMPONENTS: [Eu],
+    FUNCTION:   ""
+},
+
+### berechnete Felder
+&CALCULATE_AVE: {
+    # Durchschnittsnote aller relevanten Fächer
+    TYPE:   CALCULATE,
+    SID:    D_,
+    NAME:   "Φ alle Fächer",
+    # COMPONENTS: "keine", also alle Fächer, die nicht Sammelfach-Komponenten sind
+    FUNCTION:   AVERAGE_I
+},
+
+&CALCULATE_AVE_DEM: {
+    # Durchschnittsnote der Fächer Deutsch, Englisch und Mathematik
+    TYPE:   CALCULATE,
+    SID:    D_dem,
+    NAME:   "Φ De-En-Ma",
+    COMPONENTS: [De, En, Ma],
+    FUNCTION:   AVERAGE_I
+},
+
+&Einzelzeugnis_Standard: [
+    "Einzelzeugnis", {
+        INSTANCE: tag,   # => any string value
+        INDIVIDUAL: True, # eine nicht leere Zeichenkette 
+        GRADES: &GRADES_I,
+        EXTRA_FIELDS: [
+            {
+                TYPE:   INPUT,
+                METHOD: CHOICE_MAP,
+                SID:    REPORT_TYPE,
+                NAME:   Zeugnis-Art,
+                PARAMETERS: {
+                    CHOICES: [
+                        ["",         ""],
+                        [Abgang,     "grade_reports/SekI-Abgang"],
+                        [Zeugnis,    "grade_reports/SekI-Extra"]
+                    ]
+                }
+            },
+            {
+                TYPE:   TEXT,
+                SID:    REMARKS,
+                NAME:   Bemerkungen
+            }
+        ]
+    }
+],
+
+{
+LEVEL_MAP: {
+    Gym: Gymnasium,
+    RS: Realschule,
+    HS: Hauptschule,
+},
+
+### Felder der Tabellen
+
+INFO_FIELDS: [
+    [SCHOOLYEAR,     Schuljahr],
+    [CLASS_GROUP,    Klasse/Gruppe],
+    [OCCASION,       Anlass],
+    [INSTANCE,       Kennzeichen],
+    [DATE_ISSUE,     Ausstellungsdatum],
+    [DATE_GRADES,    Notendatum],
+    [MODIFIED,       "zuletzt geändert"],
+],
+
+HEADERS: [
+    [PID,            id],
+    [PUPIL,          Schüler(in)],
+    [LEVEL,          Maßstab],
+# danach sind die Fachkürzel (automatisch eingefügt) ...
+],
+
+EXTRA_FIELD_WIDTHS: {   
+# Spaltenbreite in "points" für "extra"-Felder, 0 => Notenbreite
+    REPORT_TYPE:    100,
+    REMARKS:        50,
+    DATE_END:       100,
+},
+
+GROUP_DATA: {
+    13: [
+        ["Abitur", {
+            SUBJECT_FUNCTION: ABI_WANI_SUBJECTS,
+            GRADES: &ABI_GRADES,
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe-Abitur",
+            EXTRA_FIELDS: [
+                {
+                    TYPE:   CALCULATE,
+                    FUNCTION: ABITUR_NIWA_RESULT,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    # COMPONENTS: "keine" (-> alle!),
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Abi, "grade_reports/Abitur"],
+                            [NA,  "grade_reports/Abitur-nicht-bestanden"],
+                            [FHS, "grade_reports/Fachhochschulreife"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: DATE,
+                    SID:    DATE_END,
+                    NAME:   Fertigstellung
+                }
+            ]
+        }],
+
+        ["1. Halbjahr", {
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe-Abitur",
+            GRADES: &GRADES_II,
+            EXTRA_FIELDS: [
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Zeugnis,    "grade_reports/SekII-13_1"],
+                            [Abgang,    "grade_reports/SekII-13-Abgang"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: TEXT,
+                    SID:    REMARKS,
+                    NAME:   Bemerkungen
+                }
+            ]
+        }],
+
+        ["2. Halbjahr", {
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe-Abitur",
+            GRADES: &GRADES_II
+        }],
+
+        ["Kursnoten", {
+            INSTANCE: ["Klausur 1", "Klausur 2", "Klausur 3"],
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe-Abitur",
+            GRADES: &GRADES_II
+        }],
+            
+        ["Einzelzeugnis", {
+            INSTANCE: tag,   # => any string value
+            INDIVIDUAL: True, # eine nicht leere Zeichenkette 
+            GRADES: &GRADES_II,
+            EXTRA_FIELDS: [
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            ["",        ""],
+                            [Abgang,    "grade_reports/SekII-13-Abgang"]
+                        ]
+                    }
+                }
+            ]
+        }]
+    ],
+    
+    12G.G: [
+        ["1. Halbjahr", {
+            SYMBOLS: {
+                HJ: "1. Halbjahr",
+                QP12: ""
+            },
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe-SII",
+            GRADES: &GRADES_II,
+            EXTRA_FIELDS: [
+                &COMPOSITE_KUNST_II,
+                &COMPOSITE_NULL,
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Zeugnis,    "grade_reports/SekII-12"],
+                            [Abgang,    "grade_reports/SekII-12-Abgang"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: TEXT,
+                    SID:    REMARKS,
+                    NAME:   Bemerkungen
+                }
+            ]
+        }],
+
+        ["2. Halbjahr", {
+            SYMBOLS: {
+                HJ: "1. und 2. Halbjahr",
+                QP12: "hat den 12. Jahrgang der Qualifikationsphase vom {DATE_QPHASE} bis zum {CALENDAR/LAST_DAY} besucht."
+            },
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe-SII",
+            GRADES: &GRADES_II,
+            EXTRA_FIELDS: [
+                &COMPOSITE_KUNST_II,
+                &COMPOSITE_NULL,
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Zeugnis,    "grade_reports/SekII-12"],
+                            [Abgang,    "grade_reports/SekII-12-Abgang"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE,
+                    SID:    Q13,
+                    NAME:   Versetzung,
+                    PARAMETERS: {
+                        CHOICES: [Q13, RS, HS]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: TEXT,
+                    SID:    REMARKS,
+                    NAME:   Bemerkungen
+                }
+            ]
+        }],
+
+        ["Einzelzeugnis",  {
+            INSTANCE: tag,   # => any string value
+            INDIVIDUAL: True, # eine nicht leere Zeichenkette
+            GRADES: &GRADES_II,
+            EXTRA_FIELDS: [
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            ["",        ""],
+                            [Abgang,    "grade_reports/SekII-12-Abgang"]
+                        ]
+                    }
+                }
+            ]
+        }]
+    ],
+    
+    12G.R: [
+        ["1. Halbjahr", {
+            SYMBOLS: {
+                HJ: "1. Halbjahr",
+            },
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe",
+            GRADES: &GRADES_Ix,
+            EXTRA_FIELDS: [
+                &COMPOSITE_KUNST_I,
+                &COMPOSITE_NULL,
+                &CALCULATE_AVE,
+                &CALCULATE_AVE_DEM,
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Zeugnis,    "grade_reports/SekI"],
+                            [Abgang,     "grade_reports/SekI-Abgang"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: TEXT,
+                    SID:    REMARKS,
+                    NAME:   Bemerkungen,
+                }
+            ]
+        }],
+
+        ["2. Halbjahr", {
+            SYMBOLS: {
+                HJ: "1. und 2. Halbjahr"
+            },
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe",
+            GRADES: &GRADES_I,
+            EXTRA_FIELDS: [
+                &COMPOSITE_KUNST_I,
+                &COMPOSITE_NULL,
+                &CALCULATE_AVE,
+                &CALCULATE_AVE_DEM,
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE,
+                    SID:    QRS,
+                    NAME:   Qualifikation
+                    PARAMETERS: {
+                        CHOICES: [Erw, RS, HS, ""]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Abschluss,  "grade_reports/SekI-Abschluss"],
+                            [Abgang,     "grade_reports/SekI-Abgang"],
+                            [Zeugnis,    "grade_reports/SekI"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: TEXT,
+                    SID:    REMARKS,
+                    NAME:   Bemerkungen,
+                }
+            ]
+        }],
+    
+        &Einzelzeugnis_Standard
+    ],
+    
+    11G: [
+        ["1. Halbjahr", {
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe",
+            GRADES: &GRADES_I,
+            EXTRA_FIELDS: [
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Orientierung, "grade_reports/Orientierung"],
+                            [Abgang,     "grade_reports/SekI-Abgang"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: TEXT,
+                    SID:    REMARKS,
+                    NAME:   Bemerkungen
+                }
+            ]
+        }],
+
+        ["2. Halbjahr", {
+            SYMBOLS: {
+                HJ: "1. und 2. Halbjahr"
+            },
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe",
+            GRADES: &GRADES_I,
+            EXTRA_FIELDS: [
+                &COMPOSITE_KUNST_I,
+                &COMPOSITE_NULL,
+                &CALCULATE_AVE,
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE,
+                    SID:    Q12,
+                    NAME:   Versetzung,
+                    PARAMETERS: {
+                        CHOICES: ["", Q12]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Zeugnis,    "grade_reports/SekI"],
+                            [Abgang,     "grade_reports/SekI-Abgang"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: TEXT,
+                    SID:    REMARKS,
+                    NAME:   Bemerkungen
+                }
+            ]
+        }],
+
+        &Einzelzeugnis_Standard
+    ],
+    
+    10G: [
+        ["2. Halbjahr", {
+            GRADE_ENTRY: "grade_entry_tables/Noteneingabe",
+            GRADES: &GRADES_I,
+            EXTRA_FIELDS: [
+                {
+                    TYPE:   INPUT,
+                    METHOD: CHOICE_MAP,
+                    SID:    REPORT_TYPE,
+                    NAME:   Zeugnis-Art,
+                    PARAMETERS: {
+                        CHOICES: [
+                            [Orientierung, "grade_reports/Orientierung"],
+                            [Abgang,     "grade_reports/SekI-Abgang"]
+                        ]
+                    }
+                },
+                {
+                    TYPE:   INPUT,
+                    METHOD: TEXT,
+                    SID:    REMARKS,
+                    NAME:   Bemerkungen
+                }
+            ]
+        }],
+
+        &Einzelzeugnis_Standard
+    ],
+
+    09G: [&Einzelzeugnis_Standard],
+    08G: [&Einzelzeugnis_Standard],
+    07G: [&Einzelzeugnis_Standard],
+    06G: [&Einzelzeugnis_Standard],
+    05G: [&Einzelzeugnis_Standard]
+}
+}

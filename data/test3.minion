@@ -1,0 +1,12 @@
+&MACRO1: [A, "list of", words], # a 3-element list,
+
+&MACRO2: {This: &MACRO1, That: "Something else"},
+
+[ # The document object
+  {
+    "First item": [1, &MACRO1],
+    "Second item": [2, &MACRO2]
+  },
+
+  "More stuff ..."
+]

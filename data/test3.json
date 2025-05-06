@@ -1,0 +1,24 @@
+[
+  {
+    "First item": [
+      "1",
+      [
+        "A",
+        "list of",
+        "words"
+      ]
+    ],
+    "Second item": [
+      "2",
+      {
+        "This": [
+          "A",
+          "list of",
+          "words"
+        ],
+        "That": "Something else"
+      }
+    ]
+  },
+  "More stuff ..."
+]

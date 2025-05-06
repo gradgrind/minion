@@ -1,0 +1,152 @@
+#+++ __TITLE__   : Allgemeine Konfiguration
+#+++ __MINION__  : 5.0
+#+++ __MODIFIED__: 2022-12-24
+#+++###########################################################
+#+++# Diese Kopfzeilen sollten nicht geändert werden, das Datum
+#+++# wird beim Speichern (in WZ) automatisch aktualisiert.
+#--------------------------------------------------------------
+{
+SCHOOL_NAME: "Freie Michaelschule",
+FONT: "Droid Sans",
+
+### Externe Anwendungen (Start-Befehl)
+LIBREOFFICE: libreoffice,
+
+###########################################################
+# Dezimal-Trennzeichen:
+DECIMAL_SEP: ",",
+
+#TODO: I should probably move this to config file TIMETABLE, and use multiple rooms ...
+# Timetable: "Extra", / unallocated room
+EXTRA_ROOM: rXXX,
+
+# Erster Monat des Schuljahres (Jan. -> 1, Dez. -> 12):
+SCHOOLYEAR_MONTH_1: 8,
+
+# Format for "school year":
+PRINT_SCHOOLYEAR: "{year1} – {year2}",
+
+# Wie ein gedrucktes Datum formatiert werden soll.
+# Hier wird es für <datetime.datetime.strftime> in Python angegeben:
+DATEFORMAT: %d.%m.%Y,    # TT.MM.JJJJ
+# Hier für Qt:
+#QT_DATEFORMAT: dd.MM.yyyy,
+
+CALENDAR_HEADER: "#*** MINION 5.0 ***#\n\[
+\]### Ferien und andere Jahresdaten\n\[
+\]### Version: {date}\n\[
+\]############################################################\n\[
+\]# Diese Kopfzeilen sollten nicht geändert werden, das Datum\n\[
+\]# wird beim Speichern automatisch aktualisiert.\n\[
+\]#-----------------------------------------------------------\n\[
+\]\n",
+
+TABLE_FORMAT: tsv,  # ("tab-separated-value") oder xlsx
+
+###########################################################
+### Übersetzungen
+
+T_SCHOOLYEARS:  Schuljahre,
+T_SCHOOLYEAR:   Schuljahr,
+T_CLASS:        Klasse,
+T_GROUP:        Gruppe,
+T_GROUPS:       Gruppen,
+
+###########################################################
+### Ordner- und Dateipfade
+### Pfad-Trennzeichen ist '/', z.B. 'Unterordner1/DateiX'.
+# Innerhalb des Datenordners:
+SCHOOL_DATA: Schuldaten/Schule,
+TEACHER_DATA: Schuldaten/Lehrer,
+SUBJECT_DATA: Schuldaten/Fachliste,
+CLASS_TIMES: Klassen/Zeiten,
+ATTENDANCE: "Klassen/Anwesenheit/Anwesenheit_{klass}.json",
+
+PUPIL_TABLE: "Klassen/Schueler/Klasse_{klass}.tsv",
+SUBJECT_TABLE: "Klassen/Kursdaten/Fachliste-{klass}",
+CHOICE_TABLE: "Klassen/Kurswahl/Wahl-{klass}",
+
+# "Resources"
+CLASS_ATTENDANCE_TEMPLATE: templates/Vorlage_Klassenbuch.xlsx,
+COURSE_CHOICE_TEMPLATE: templates/Fachwahl.xlsx,
+
+# Gruppen, die am Ende des Schuljahres die Schule verlassen
+LEAVING_GROUPS: [13, 12K, 12G.R],
+# Klassen mit einer „besonderen“ Versetzung am Ende des Schuljahres
+MIGRATE_CLASS: {12G: 13},
+
+###########################################################
+### Schülerdaten ###
+# Die Datenbankfelder werden mit internem Namen und "lokalem" Namen
+# angegeben.
+# Das dritte Feld gibt die Funktion an, die die Eingabe neuer Werte
+# verwaltet (Editierfunktion). Das vierte Feld erlaubt die Angabe
+# Parameter für die Editierfunktion.
+# Das letzte Feld gibt an, ob das Feld bei der Eingabe leer sein darf.
+# Hier wird "Pflicht" verwendet, es könnte aber jede nicht leere
+# Zeichenkette sein.
+# Feld "SORT_NAME" wird automatisch ausgefüllt, wenn es leer ist.
+
+PUPILS_FIELDS: [
+# Diese werden im Programm verwendet:
+    [CLASS,          Klasse,              CLASS_CHOICE,    "",      Pflicht],
+    [PID ,           ID ,                 PID ,            ""     , Pflicht],
+    [SORT_NAME,      Sortiername,         SORT_NAME,       "",      ""],
+    [LASTNAME,       Name,                LINE,            "",      Pflicht],
+    [FIRSTNAMES,     Vornamen,            LINE,            ""     , Pflicht],
+    [FIRSTNAME,      Rufname,             LINE,            "",      Pflicht],
+    [GROUPS,         Gruppen,             GROUPS,          "",      ""],
+    [DATE_EXIT,      Schulaustritt,       DATE_OR_EMPTY,   "",      ""],
+    [LEVEL,          Bewertungsmaßstab,   CHOICE, ["", Gym, RS, HS],   ""],
+# Felder, die nicht direkt im Programm verwendet werden,
+# die aber für Zeugnisse usw. zur Verfügung stehen sollten:
+    [DATE_ENTRY,     Eintrittsdatum,      DATE,            "",      Pflicht],
+    [DATE_BIRTH,     Geburtsdatum,        DATE,            "",      Pflicht],
+    [BIRTHPLACE,     Geburtsort,          LINE,            "",      Pflicht],
+    [SEX,            Geschlecht,          CHOICE, [m, w],            Pflicht],
+    [HOME,           Wohnort,             LINE,            "",      Pflicht],
+    [DATE_QPHASE,    SekII-Eintritt,      DATE_OR_EMPTY,   "",      ""],
+],
+
+DUMMY_PUPIL: [
+#    [CLASS,          todo],
+    [PID,            TODO],
+    [SORT_NAME,      TODO],
+    [LASTNAME,       TODO],
+    [FIRSTNAMES,     TODO],
+    [FIRSTNAME,      TODO],
+#    [GROUPS,         ""],
+#    [DATE_EXIT,      ""],
+#    [LEVEL,          ""],
+    [DATE_ENTRY,     TODO],
+    [DATE_BIRTH,     TODO],
+    [BIRTHPLACE,     TODO],
+    [SEX,            w],
+    [HOME,           TODO],
+#    [DATE_QPHASE,    ""]
+],
+
+# Wenn dieser Eintrag vorhanden ist, sind die Elemente Feldnamenpaare:
+# ["interner Name" "externer Name"].
+# Die externen Daten können anhand der Funktion <pupils_data_import>
+# im Modul local/local_pupils eingelesen werden.
+MASTER_DB: [
+    [CLASS,          klasse], # oder "Schulklasse"?
+    [PID,            ID],
+#    [SORT_NAME,      Sortiername],
+    [LASTNAME,       Name],
+    [FIRSTNAMES,     vornamen],
+    [FIRSTNAME,      Rufname],
+#    [GROUPS,         Gruppen],
+    [DATE_EXIT,      Schulaustritt], # oder "Austrittsdatum"?
+#    [LEVEL          Bewertungsmaßstab],
+# Felder, die nicht direkt im Programm verwendet werden,
+# die aber für Zeugnisse usw. zur Verfügung stehen sollten:
+    [DATE_ENTRY,     eintrittsdatum],
+    [DATE_BIRTH,     geburtsdatum],
+    [BIRTHPLACE,     geburtsort],
+    [SEX,            Geschlecht],
+    [HOME,           ort]
+#    [DATE_QPHASE,    SekII-Eintritt]
+]
+}

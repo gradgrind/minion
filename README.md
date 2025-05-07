@@ -4,7 +4,7 @@ MINION is a mark-up language for simple data transfer, configuration files, etc.
 
 JSON is actually valid MINION, but not necessarily the other way round. MINION is simpler in the sense that it has no data types apart from strings, but extends JSON in a few ways to make it more convenient for writing by hand. See [minion.md](minion.md) for more details.
 
-Initial implementations (serializers and deserializers) are provided in C and Go. The current serializers output valid JSON (which can also be read back in by the deserializers).
+Initial implementations (serializers and deserializers) are provided in C and Go. The current serializers output valid JSON (which can also be read back in by the deserializers). There is also a C++ version, which isn't really C++, it's just the C version modified to run through a C++ compiler ...
 
 The Go version has a test file which shows the basic usage of the functions.
 

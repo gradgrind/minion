@@ -533,7 +533,7 @@ func new_Array(start_index int) {
 }
 
 // *** Handle the map type as PairArray
-func (m *MinionPairArray) find(key MinionString) (MinionValue, bool) {
+func (m *MinionPairArray) Find(key MinionString) (MinionValue, bool) {
 	for _, v := range *m {
 		if v.Key == key {
 			return v.Value, true
@@ -556,7 +556,7 @@ func get_map() FlagType {
 		// expect key
 		if mtype == T_String {
 			key := remembered_items[len(remembered_items)-1].Data.(MinionString)
-			if _, ok := m.find(key); ok {
+			if _, ok := m.Find(key); ok {
 				panic(fmt.Sprintf(
 					"Map key not unique: %s (at position %s)",
 					key,

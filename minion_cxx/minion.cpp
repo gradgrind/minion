@@ -1,10 +1,10 @@
 #include "minion.h"
-#include "stdio.h"
-#include <setjmp.h>
-#include <stdarg.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <string.h>
+//#include <stdbool.h>
+#include <csetjmp>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 /* All the values in minion_Flags (apart from the null F_NoFlags) are
  * greater than the highest value in minion_Type, so that when type is
@@ -69,12 +69,12 @@ void add_to_read_buffer(
 {
     if (read_buffer_index == read_buffer_size) {
         // Increase the size of the buffer
-        char* tmp = malloc(read_buffer_size + read_buffer_size_increment);
+        void* tmp = malloc(read_buffer_size + read_buffer_size_increment);
         if (!tmp)
             exit(1);
         memcpy(tmp, read_buffer, read_buffer_size);
         free(read_buffer);
-        read_buffer = tmp;
+        read_buffer = (char*) tmp;
         read_buffer_size += read_buffer_size_increment;
     }
     read_buffer[read_buffer_index++] = ch;
@@ -96,12 +96,12 @@ void dump_ch(
 {
     if (dump_buffer_index == dump_buffer_size) {
         // Increase the size of the buffer
-        char* tmp = malloc(dump_buffer_size + dump_buffer_size_increment);
+        void* tmp = malloc(dump_buffer_size + dump_buffer_size_increment);
         if (!tmp)
             exit(1);
         memcpy(tmp, dump_buffer, dump_buffer_size);
         free(dump_buffer);
-        dump_buffer = tmp;
+        dump_buffer = (char*) tmp;
         dump_buffer_size += dump_buffer_size_increment;
     }
     dump_buffer[dump_buffer_index++] = ch;
@@ -152,7 +152,7 @@ void error(
     int nx = n + recent + 10;
     if (error_message_size < nx) {
         free(error_message);
-        error_message = malloc(nx);
+        error_message = (char*) malloc(nx);
         if (!error_message)
             exit(1);
         error_message_size = nx;
@@ -199,13 +199,13 @@ void free_item(
     if (mitem.flags & F_MACRO_VALUE)
         return;
     if (mitem.type == T_Array) {
-        minion_value* p = mitem.data;
+        minion_value* p = (minion_value*) mitem.data;
         msize n = mitem.size;
         for (msize i = 0; i < n; ++i) {
             free_item(p[i]);
         }
     } else if (mitem.type == T_PairArray) {
-        minion_pair* p = mitem.data;
+        minion_pair* p = (minion_pair*) mitem.data;
         msize n = mitem.size;
         for (msize i = 0; i < n; ++i) {
             minion_pair mp = p[i];
@@ -341,11 +341,11 @@ void new_String(
 {
     // Remember "+1" for 0-terminator
     unsigned int l = strlen(text);
-    char* s = malloc(sizeof(char) * (l + 1));
+    void* s = malloc(sizeof(char) * (l + 1));
     if (!s)
         exit(1);
     memcpy(s, text, l + 1);
-    remember((minion_value) {stype, sflags, l, s});
+    remember((minion_value) {(short)stype, (short) sflags, l, s});
 }
 
 // Build a new Array item from items on the stack, the starting index
@@ -354,7 +354,7 @@ void new_String(
 void new_Array(
     int start_index)
 {
-    minion_value* a = 0;
+    void* a = 0;
     int len = remembered_items_index - start_index;
     if (len > 0) {
         size_t nbytes = sizeof(minion_value) * len;
@@ -368,7 +368,7 @@ void new_Array(
         fputs("[BUG] In new_Array: remembered_items_index < start_index", stderr);
         exit(100);
     }
-    remember((minion_value) {T_Array, 0, len, a});
+    remember((minion_value) {T_Array, 0, (msize) len, a});
 }
 
 // Build a new PairArray item from items on the stack, the starting index
@@ -377,7 +377,7 @@ void new_Array(
 void new_PairArray(
     int start_index)
 {
-    minion_pair* a = 0;
+    void* a = 0;
     int len = remembered_items_index - start_index;
     if (len & 1) {
         // Each entry is a pair, i.e. it consists of two items.
@@ -397,7 +397,7 @@ void new_PairArray(
         fputs("[BUG] In new_PairArray: remembered_items_index < start_index", stderr);
         exit(100);
     }
-    remember((minion_value) {T_PairArray, 0, len, a});
+    remember((minion_value) {T_PairArray, 0, (msize) len, a});
 }
 
 typedef struct
@@ -408,7 +408,7 @@ typedef struct
 
 position here()
 {
-    return (position) {line_index + 1, ch_pointer - ch_linestart};
+    return (position) {line_index + 1, (msize) (ch_pointer - ch_linestart)};
 }
 
 #define position_size 20
@@ -650,11 +650,11 @@ minion_value last_item()
 bool is_key_unique(
     int i_start)
 {
-    char* key = last_item().data;
+    char* key = (char*) last_item().data;
     int i = i_start;
     int i_end = remembered_items_index - 1; // index of key
     while (i < i_end) {
-        if (strcmp(remembered_items[i].data, key) == 0)
+        if (strcmp((char*) remembered_items[i].data, key) == 0)
             return false;
         i += 2;
     }
@@ -666,7 +666,7 @@ minion_Type get_map()
     int start_index = remembered_items_index;
     position current_pos = here();
     short mtype = get_item();
-    char* seeking;
+    char const* seeking;
     while (true) {
         // ',' before the closing bracket is allowed
         if (mtype == F_Token_MapEnd)
@@ -760,7 +760,7 @@ short get_item()
                     // Push to remember stack, marking it as not the owner of
                     // its data
                     remember(
-                        (minion_value) {mm->type, mm->flags + F_MACRO_VALUE, mm->size, mm->data});
+                        (minion_value) {mm->type, (short)(mm->flags + F_MACRO_VALUE), mm->size, mm->data});
                     result = mm->type;
                     break;
                 }
@@ -923,10 +923,10 @@ minion_doc minion_read(
                 minion_value mname = remembered_items[0];
                 minion_value mval = remembered_items[1];
                 remembered_items_index = 0;
-                macro_node* a = malloc(sizeof(macro_node));
+                macro_node* a = (macro_node*) malloc(sizeof(macro_node));
                 if (!a)
                     exit(1);
-                *a = (macro_node) {mname.data, macros, mval};
+                *a = (macro_node) {(char*) mname.data, macros, mval};
                 macros = a;
                 continue;
             }
@@ -962,7 +962,7 @@ minion_doc minion_read(
 char* minion_error(
     minion_doc doc)
 {
-    return doc.error.flags == F_Error ? doc.error.data : NULL;
+    return (char*) (doc.error.flags == F_Error ? doc.error.data : NULL);
 }
 
 void dump_string(
@@ -1088,7 +1088,7 @@ bool dump_map(
         minion_pair mp = ((minion_pair*) source.data)[i];
         if (mp.key.type != T_String)
             return false;
-        dump_string(mp.key.data);
+        dump_string((char*) mp.key.data);
         dump_ch(':');
         if (depth >= 0)
             dump_ch(' ');
@@ -1109,7 +1109,7 @@ bool dump_value(
     switch (source.type) {
     case T_String:
         // Strings don't receive any extra formatting
-        dump_string(source.data);
+        dump_string((char*) source.data);
         break;
     case T_Array:
         ok = dump_list(source, depth);

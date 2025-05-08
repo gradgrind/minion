@@ -11,12 +11,21 @@ typedef unsigned int msize;
 #define dump_buffer_size_increment 1000
 #define remembered_items_size_increment 10
 
+// Used for recording read-position in input text
 struct position
 {
     msize line_n;
     msize byte_ix;
 };
 #define position_size 20
+
+// Node for building the macro map as a linked list
+struct macro_node
+{
+    char* name;
+    struct macro_node* next;
+    minion_value value;
+};
 
 /* All the values in minion_Flags (apart from the null F_NoFlags) are
  * greater than the highest value in minion_Type, so that when type is
@@ -61,7 +70,8 @@ typedef enum {
 
 class Minion
 {
-    // For character-by-character reading
+    // For character-by-character reading. These point to memory which is
+    // not controlled by Minion, so they do not need freeing.
     const char* ch_pointer0;
     const char* ch_pointer;
     const char* ch_linestart = 0;
@@ -98,18 +108,14 @@ class Minion
     // Manage the macros
     macro_node* macros = NULL;
 
-public:
     void reset_read_buffer_index();
     void add_to_read_buffer(char ch);
     void clear_dump_buffer();
     void dump_ch(char ch);
     void undump_ch();
     void error(const char* msg, ...);
-    void tidy_dump();
-    void tidy();
     minion_value* find_macro(char* name);
     void remember(minion_value minion_item);
-    void release();
     void new_String(const char* text, minion_Type stype, minion_Flags sflags);
     void new_Array(int start_index);
     void new_PairArray(int start_index);
@@ -124,17 +130,53 @@ public:
     bool is_key_unique(int i_start);
     minion_Type get_map();
     short get_item();
-    minion_value read(const char* input);
     void dump_string(const char* source);
     void dump_pad(int n);
     bool dump_list(minion_value source, int depth);
     bool dump_map(minion_value source, int depth);
     bool dump_value(minion_value source, int depth);
-    char* dump(minion_value source, int depth);
     minion_value pop_remembered();
     minion_value new_minion_array(std::initializer_list<minion_value> items);
     minion_value new_minion_map(std::initializer_list<pair_input> items);
+
+public:
+
+    ~Minion();
+
+    minion_value read(const char* input);
+    
+    //TODO: Change to use "pretty", which is the tab size. If 0 or less
+    // the compact form will be used.
+    char* dump(minion_value source, int pretty);
+    //char* dump(minion_value source, int depth);
+ 
+    //TODO?
+    void tidy_dump();
+    void release();
+
 };
+
+// Free all buffers
+Minion::~Minion()
+{
+    free(read_buffer);
+    free(dump_buffer);
+    free(error_message);
+    free(remembered_items);
+    //TODO: macros should be freed on exit from read()
+}
+
+/* This might work for the macros ...
+#include <string>
+#include <map>
+std::map<std::string, minion_value> mvmap;
+
+minion_value mvmapfind_find(char* key)
+{
+    mvmap.emplace(key, minion_value{});
+    return mvmap.at(key);
+}
+*/
 
 void Minion::reset_read_buffer_index()
 {
@@ -320,25 +362,6 @@ void Minion::tidy_dump()
     dump_buffer = 0;
     dump_buffer_size = 0;
     dump_buffer_index = 0;
-}
-
-// Free all longer-term buffers.
-void Minion::tidy()
-{
-    free(read_buffer);
-    //printf("??? Size of read_buffer = %zu\n", read_buffer_size);
-    read_buffer = 0;
-    read_buffer_size = 0;
-    read_buffer_index = 0;
-
-    free(error_message);
-    error_message = 0;
-    error_message_size = 0;
-
-    free(remembered_items);
-    remembered_items = 0;
-    remembered_items_size = 0;
-    remembered_items_index = 0;
 }
 
 bool minion_isString(

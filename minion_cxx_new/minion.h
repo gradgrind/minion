@@ -26,6 +26,9 @@
  * automatically. Perhaps this should count as a parsing error?
 */
 
+//TODO: This needs a destructor to free the memory (recursively).
+//TODO: This needs a find() method to do key lookup in a map (fail if not
+// map ...)
 struct minion_value
 {
     short type;
@@ -33,22 +36,6 @@ struct minion_value
     unsigned int size;
     void* data;
 };
-
-/*
-struct macro_node
-{
-    char* name;
-    struct macro_node* next;
-    minion_value value;
-};
-
-struct minion_doc
-{
-    minion_value minion_item;
-    minion_value error;
-    macro_node* macros;
-};
-*/
 
 // The result must be freed when it is no longer needed
 minion_value minion_read(const char* input);

@@ -124,7 +124,7 @@ public:
     bool is_key_unique(int i_start);
     minion_Type get_map();
     short get_item();
-    minion_doc read(const char* input);
+    minion_value read(const char* input);
     void dump_string(const char* source);
     void dump_pad(int n);
     bool dump_list(minion_value source, int depth);
@@ -248,7 +248,7 @@ struct minion_pair
 };
 
 // Free the memory used for a minion item.
-void minion_free_item(
+void minion_free(
     minion_value mitem)
 {
     if (mitem.flags & F_MACRO_VALUE)
@@ -257,15 +257,15 @@ void minion_free_item(
         minion_value* p = (minion_value*) mitem.data;
         msize n = mitem.size;
         for (msize i = 0; i < n; ++i) {
-            minion_free_item(p[i]);
+            minion_free(p[i]);
         }
     } else if (mitem.type == T_PairArray) {
         minion_pair* p = (minion_pair*) mitem.data;
         msize n = mitem.size;
         for (msize i = 0; i < n; ++i) {
             minion_pair mp = p[i];
-            minion_free_item(mp.key);
-            minion_free_item(mp.value);
+            minion_free(mp.key);
+            minion_free(mp.value);
         }
     }
     // Free the memory pointed to directly by the data field. This will
@@ -283,7 +283,7 @@ void free_macros(
 {
     while (mp) {
         free(mp->name);
-        minion_free_item(mp->value);
+        minion_free(mp->value);
         macro_node* mp0 = mp;
         mp = mp->next;
         free(mp0);
@@ -347,14 +347,6 @@ bool minion_isString(
     return (v.type == T_String);
 }
 
-void minion_free(
-    minion_doc doc)
-{
-    minion_free_item(doc.minion_item);
-    free_macros(doc.macros);
-    minion_free_item(doc.error);
-}
-
 void Minion::remember(
     minion_value minion_item)
 {
@@ -377,7 +369,7 @@ void Minion::remember(
 void Minion::release()
 {
     for (int i = 0; i < remembered_items_index; ++i) {
-        minion_free_item(remembered_items[i]);
+        minion_free(remembered_items[i]);
     }
     remembered_items_index = 0;
 }
@@ -907,7 +899,8 @@ short Minion::get_item()
     return result;
 }
 
-minion_doc Minion::read(
+//TODO: Adapt to loss of minion_doc!
+minion_value Minion::read(
     const char* input)
 {
     if (macros) {
@@ -921,7 +914,7 @@ minion_doc Minion::read(
     if (setjmp(recover)) {
         // Free redundant malloced items
         for (int i = 0; i < remembered_items_index; ++i) {
-            minion_free_item(remembered_items[i]);
+            minion_free(remembered_items[i]);
         }
         remembered_items_index = 0;
         // Free any macros
@@ -1012,9 +1005,9 @@ minion_doc Minion::read(
 }
 
 char* minion_error(
-    minion_doc doc)
+    minion_value m)
 {
-    return (char*) (doc.error.flags == F_Error ? doc.error.data : NULL);
+    return (char*) (m.flags == F_Error ? m.data : NULL);
 }
 
 void Minion::dump_string(

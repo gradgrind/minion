@@ -3,27 +3,29 @@
 
 #include <initializer_list>
 
-typedef struct
+//TODO: Adapt to new Minion class ...
+
+struct minion_value
 {
     short type;
     short flags;
     unsigned int size;
     void* data;
-} minion_value;
+};
 
-typedef struct macro_node
+struct macro_node
 {
     char* name;
     struct macro_node* next;
     minion_value value;
-} macro_node;
+};
 
-typedef struct
+struct minion_doc
 {
     minion_value minion_item;
     minion_value error;
     macro_node* macros;
-} minion_doc;
+};
 
 // The result must be freed when it is no longer needed
 minion_doc minion_read(const char* input);

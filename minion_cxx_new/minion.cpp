@@ -10,9 +10,55 @@ typedef unsigned int msize;
 #define read_buffer_size_increment 100
 #define dump_buffer_size_increment 1000
 #define remembered_items_size_increment 10
+
+struct position
+{
+    msize line_n;
+    msize byte_ix;
+};
 #define position_size 20
 
-//TODO: Move all static data and its handlers into the new class Minion
+/* All the values in minion_Flags (apart from the null F_NoFlags) are
+ * greater than the highest value in minion_Type, so that when type is
+ * T_NoType the flags value can be used instead without ambiguity.
+*/
+#define MIN_FLAG 8
+typedef enum {
+    F_NoFlags = 0,
+    F_Simple_String = MIN_FLAG, // undelimited string
+    F_Error,
+    F_Macro,
+    F_Token_End,
+    F_Token_String_Delim,
+    F_Token_ListStart,
+    F_Token_ListEnd,
+    F_Token_MapStart,
+    F_Token_MapEnd,
+    F_Token_Comma,
+    F_Token_Colon,
+
+    // This bit will be set if the data field refers to memory that this
+    // item does not "own", i.e. it shouldn't be freed.
+    F_MACRO_VALUE = 32
+} minion_Flags;
+
+typedef enum {
+    T_NoType = 0,
+    T_String,
+    T_Array,
+    T_PairArray,
+} minion_Type;
+
+/* *** BUFFERS ***
+ * minion uses buffers for various purposes. These get their space using
+ * malloc and may grow when more space is needed.
+ * This space is not freed, so that once a buffer has been created it can
+ * be reused. Also at the end of a call to minion_read it is not
+ * necessary to free the space, so that subsequent calls may not need to
+ * reallocate the space. However, it may be desirable to free this space
+ * at some time, so for this purpose there is the function minion_tidy().
+*/
+
 class Minion
 {
     // For character-by-character reading
@@ -61,48 +107,34 @@ public:
     void error(const char* msg, ...);
     void tidy_dump();
     void tidy();
+    minion_value* find_macro(char* name);
+    void remember(minion_value minion_item);
+    void release();
+    void new_String(const char* text, minion_Type stype, minion_Flags sflags);
+    void new_Array(int start_index);
+    void new_PairArray(int start_index);
+    position here();
+    char* pos(position p);
+    char read_ch(bool instring);
+    void unread_ch();
+    bool add_unicode_to_read_buffer(int len);
+    minion_Type get_string();
+    minion_Type get_list();
+    minion_value last_item();
+    bool is_key_unique(int i_start);
+    minion_Type get_map();
+    short get_item();
+    minion_doc read(const char* input);
+    void dump_string(const char* source);
+    void dump_pad(int n);
+    bool dump_list(minion_value source, int depth);
+    bool dump_map(minion_value source, int depth);
+    bool dump_value(minion_value source, int depth);
+    char* dump(minion_value source, int depth);
+    minion_value pop_remembered();
+    minion_value new_minion_array(std::initializer_list<minion_value> items);
+    minion_value new_minion_map(std::initializer_list<pair_input> items);
 };
-
-/* All the values in minion_Flags (apart from the null F_NoFlags) are
- * greater than the highest value in minion_Type, so that when type is
- * T_NoType the flags value can be used instead without ambiguity.
-*/
-#define MIN_FLAG 8
-typedef enum {
-    F_NoFlags = 0,
-    F_Simple_String = MIN_FLAG, // undelimited string
-    F_Error,
-    F_Macro,
-    F_Token_End,
-    F_Token_String_Delim,
-    F_Token_ListStart,
-    F_Token_ListEnd,
-    F_Token_MapStart,
-    F_Token_MapEnd,
-    F_Token_Comma,
-    F_Token_Colon,
-
-    // This bit will be set if the data field refers to memory that this
-    // item does not "own", i.e. it shouldn't be freed.
-    F_MACRO_VALUE = 32
-} minion_Flags;
-
-typedef enum {
-    T_NoType = 0,
-    T_String,
-    T_Array,
-    T_PairArray,
-} minion_Type;
-
-/* *** BUFFERS ***
- * minion uses buffers for various purposes. These get their space using
- * malloc and may grow when more space is needed.
- * This space is not freed, so that once a buffer has been created it can
- * be reused. Also at the end of a call to minion_read it is not
- * necessary to free the space, so that subsequent calls may not need to
- * reallocate the space. However, it may be desirable to free this space
- * at some time, so for this purpose there is the function minion_tidy().
-*/
 
 void Minion::reset_read_buffer_index()
 {
@@ -246,9 +278,6 @@ void minion_free_item(
     // trying to free these!
 }
 
-//TODO???
-void new_macro() {}
-
 void free_macros(
     macro_node* mp)
 {
@@ -261,7 +290,7 @@ void free_macros(
     }
 }
 
-minion_value* find_macro(
+minion_value* Minion::find_macro(
     char* name)
 {
     macro_node* mp = macros;
@@ -326,7 +355,7 @@ void minion_free(
     minion_free_item(doc.error);
 }
 
-void remember(
+void Minion::remember(
     minion_value minion_item)
 {
     if (remembered_items_index == remembered_items_size) {
@@ -345,7 +374,7 @@ void remember(
     remembered_items[remembered_items_index++] = minion_item;
 }
 
-void release()
+void Minion::release()
 {
     for (int i = 0; i < remembered_items_index; ++i) {
         minion_free_item(remembered_items[i]);
@@ -369,7 +398,7 @@ minion_value new_minion_string(const char* text)
 
 // Build a new String item from a char*. Place the result on the
 // remember stack.
-void new_String(
+void Minion::new_String(
     const char* text, minion_Type stype, minion_Flags sflags)
 {
     // Remember "+1" for 0-terminator
@@ -384,7 +413,7 @@ void new_String(
 // Build a new Array item from items on the stack, the starting index
 // being passed as argument.
 // Place the result on the remember stack.
-void new_Array(
+void Minion::new_Array(
     int start_index)
 {
     void* a = 0;
@@ -407,7 +436,7 @@ void new_Array(
 // Build a new PairArray item from items on the stack, the starting index
 // being passed as argument.
 // Place the result on the remember stack.
-void new_PairArray(
+void Minion::new_PairArray(
     int start_index)
 {
     void* a = 0;
@@ -433,25 +462,19 @@ void new_PairArray(
     remember((minion_value) {T_PairArray, 0, (msize) len, a});
 }
 
-struct position
-{
-    msize line_n;
-    msize byte_ix;
-};
-
-position here()
+position Minion::here()
 {
     return (position) {line_index + 1, (msize) (ch_pointer - ch_linestart)};
 }
 
-char* pos(
+char* Minion::pos(
     position p)
 {
     snprintf(position_buffer, position_size, "%d.%d", p.line_n, p.byte_ix);
     return position_buffer;
 }
 
-static char read_ch(
+char Minion::read_ch(
     bool instring)
 {
     char ch = *ch_pointer;
@@ -483,7 +506,7 @@ static char read_ch(
     exit(3); // unreachable
 }
 
-void unread_ch()
+void Minion::unread_ch()
 {
     if (ch_pointer == ch_pointer0) {
         fputs("[BUG] unread_ch reached start of data", stderr);
@@ -495,7 +518,7 @@ void unread_ch()
 // --- END: Handle character-by-character reading ---
 
 // Convert a unicode code point (as hex string) to a UTF-8 string
-bool add_unicode_to_read_buffer(
+bool Minion::add_unicode_to_read_buffer(
     int len)
 {
     // Convert the unicode to an integer
@@ -553,7 +576,7 @@ bool add_unicode_to_read_buffer(
  *
  * Return the string as a minion_value.
  */
-minion_Type get_string()
+minion_Type Minion::get_string()
 {
     position start_pos = here();
     char ch;
@@ -633,9 +656,7 @@ minion_Type get_string()
     return T_String;
 }
 
-short get_item();
-
-minion_Type get_list()
+minion_Type Minion::get_list()
 {
     int start_index = remembered_items_index;
     position current_pos = here();
@@ -669,7 +690,7 @@ minion_Type get_list()
     return T_Array;
 }
 
-minion_value last_item()
+minion_value Minion::last_item()
 {
     if (remembered_items_index) {
         return remembered_items[remembered_items_index - 1];
@@ -678,7 +699,7 @@ minion_value last_item()
     exit(100);
 }
 
-bool is_key_unique(
+bool Minion::is_key_unique(
     int i_start)
 {
     char* key = (char*) last_item().data;
@@ -692,7 +713,7 @@ bool is_key_unique(
     return true;
 }
 
-minion_Type get_map()
+minion_Type Minion::get_map()
 {
     int start_index = remembered_items_index;
     position current_pos = here();
@@ -754,7 +775,7 @@ minion_Type get_map()
  * Strings are read into a buffer, which grows if it is too small.
  * Compound items are constructed by reading their components onto a stack.
 */
-short get_item()
+short Minion::get_item()
 {
     char ch;
     reset_read_buffer_index();
@@ -886,7 +907,7 @@ short get_item()
     return result;
 }
 
-minion_doc minion_read(
+minion_doc Minion::read(
     const char* input)
 {
     if (macros) {
@@ -996,7 +1017,7 @@ char* minion_error(
     return (char*) (doc.error.flags == F_Error ? doc.error.data : NULL);
 }
 
-void dump_string(
+void Minion::dump_string(
     const char* source)
 {
     dump_ch('"');
@@ -1068,9 +1089,7 @@ void dump_string(
     }
 }
 
-bool dump_value(minion_value source, int depth);
-
-void dump_pad(
+void Minion::dump_pad(
     int n)
 {
     if (n >= 0) {
@@ -1082,7 +1101,7 @@ void dump_pad(
     }
 }
 
-bool dump_list(
+bool Minion::dump_list(
     minion_value source, int depth)
 {
     int pad = -1;
@@ -1103,7 +1122,7 @@ bool dump_list(
     return true;
 }
 
-bool dump_map(
+bool Minion::dump_map(
     minion_value source, int depth)
 {
     int pad = -1;
@@ -1131,7 +1150,7 @@ bool dump_map(
     return true;
 }
 
-bool dump_value(
+bool Minion::dump_value(
     minion_value source, int depth)
 {
     bool ok = true;
@@ -1152,7 +1171,7 @@ bool dump_value(
     return ok;
 }
 
-char* minion_dump(
+char* Minion::dump(
     minion_value source, int depth)
 {
     clear_dump_buffer();
@@ -1165,14 +1184,14 @@ char* minion_dump(
 
 // *** Construction functions ...
 
-minion_value pop_remembered()
+minion_value Minion::pop_remembered()
 {
     return remembered_items[--remembered_items_index];
 }
 
 // Build a new list item from the arguments, which are of type minion_value.
 // It (eventually) needs to be freed with free_item().
-minion_value new_minion_array(std::initializer_list<minion_value> items)
+minion_value Minion::new_minion_array(std::initializer_list<minion_value> items)
 {
     auto start_index = remembered_items_index;
     for (const auto& item : items) {
@@ -1184,7 +1203,7 @@ minion_value new_minion_array(std::initializer_list<minion_value> items)
 
 // Build a new map item from the arguments, which are pair_input items.
 // It (eventually) needs to be freed with free_item().
-minion_value new_minion_map(std::initializer_list<pair_input> items)
+minion_value Minion::new_minion_map(std::initializer_list<pair_input> items)
 {
     auto start_index = remembered_items_index;
     for (const auto& item : items) {

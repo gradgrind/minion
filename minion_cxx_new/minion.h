@@ -26,25 +26,49 @@
  * automatically. Perhaps this should count as a parsing error?
 */
 
+struct minion_pair; // forward declaration
+
 //TODO: This needs a destructor to free the memory (recursively).
 //TODO: This needs a find() method to do key lookup in a map (fail if not
 // map ...)
-struct minion_value
+class MinionValue
 {
+    friend class Minion; // TODO?
+
     short type;
     short flags;
     unsigned int size;
     void* data;
+
+    // constructor for explicit initialization
+    MinionValue(short type, short flags, unsigned int size, void* data);
+
+public:
+    MinionValue(); // null value constructor
+    MinionValue(const char* text, bool simple = false); // string constructor
+    MinionValue(std::initializer_list<MinionValue> items); // list constructor
+    MinionValue(minion_pair* pairs, int size); // map constructor
+    ~MinionValue();
+    bool is_string();
+    bool is_list();
+    bool is_map();
+    MinionValue find(const char* key);
+};
+
+struct minion_pair
+{
+    MinionValue key;
+    MinionValue value;
 };
 
 // The result must be freed when it is no longer needed
-minion_value minion_read(const char* input);
+MinionValue minion_read(const char* input);
 
 // Return the error message, or NULL if the item is not an error item
-char* minion_error(minion_value item);
+char* minion_error(MinionValue item);
 
 // Free the memory used for a minion_value.
-void minion_free(minion_value item);
+void minion_free(MinionValue item);
 
 // Serialize a minion_value
 //TODO: Perhaps I should have just a boolean argument for "pretty"/"compact"?
@@ -53,7 +77,7 @@ void minion_free(minion_value item);
 
 // I could encapsulate this in a class so that it is more C++ like (with
 // destructor):
-char* minion_dump(minion_value source, int depth);
+char* minion_dump(MinionValue source, int depth);
 // Free the memory used for a minion dump.
 void minion_tidy_dump();
 
@@ -65,16 +89,18 @@ void minion_tidy();
 // minion_value items they are passed and need freeing with minion_free_item()
 // when they are no longer in use.
 
-minion_value new_minion_string(const char* text);
+MinionValue new_minion_string(const char* text);
 
-minion_value new_minion_array(std::initializer_list<minion_value> items);
+//TODO ... how? MinionValue constructor? ... needs Minion item access ...
+MinionValue new_minion_array(std::initializer_list<MinionValue> items);
 
 struct pair_input // needed only for construction of maps in new_minion_map
 {
     const char* key;
-    minion_value value;
+    MinionValue value;
 };
 
-minion_value new_minion_map(std::initializer_list<pair_input> items);
+//TODO ... how? MinionValue constructor? ... needs Minion item access ...
+MinionValue new_minion_map(std::initializer_list<pair_input> items);
 
 #endif // MINION_H

@@ -24,7 +24,7 @@ struct macro_node
 {
     char* name;
     struct macro_node* next;
-    minion_value value;
+    MinionValue value;
 };
 
 /* All the values in minion_Flags (apart from the null F_NoFlags) are
@@ -101,7 +101,7 @@ class Minion
 
     // Keep track of "unbound" minion items
     // The buffer for these items is used as a stack.
-    minion_value* remembered_items = 0;
+    MinionValue* remembered_items = 0;
     int remembered_items_size = 0;
     int remembered_items_index = 0;
 
@@ -114,10 +114,9 @@ class Minion
     void dump_ch(char ch);
     void undump_ch();
     void error(const char* msg, ...);
-    minion_value* find_macro(char* name);
-    void remember(minion_value minion_item);
-    void new_String(const char* text, minion_Type stype, minion_Flags sflags);
-    void new_Array(int start_index);
+    MinionValue* find_macro(char* name);
+    void remember(MinionValue minion_item);
+    MinionValue new_Array(int start_index);
     void new_PairArray(int start_index);
     position here();
     char* pos(position p);
@@ -126,28 +125,28 @@ class Minion
     bool add_unicode_to_read_buffer(int len);
     minion_Type get_string();
     minion_Type get_list();
-    minion_value last_item();
+    MinionValue last_item();
     bool is_key_unique(int i_start);
     minion_Type get_map();
     short get_item();
     void dump_string(const char* source);
     void dump_pad(int n);
-    bool dump_list(minion_value source, int depth);
-    bool dump_map(minion_value source, int depth);
-    bool dump_value(minion_value source, int depth);
-    minion_value pop_remembered();
-    minion_value new_minion_array(std::initializer_list<minion_value> items);
-    minion_value new_minion_map(std::initializer_list<pair_input> items);
+    bool dump_list(MinionValue source, int depth);
+    bool dump_map(MinionValue source, int depth);
+    bool dump_value(MinionValue source, int depth);
+    MinionValue pop_remembered();
+    MinionValue new_minion_array(std::initializer_list<MinionValue> items);
+    MinionValue new_minion_map(std::initializer_list<pair_input> items);
 
 public:
 
     ~Minion();
 
-    minion_value read(const char* input);
+    MinionValue read(const char* input);
     
     //TODO: Change to use "pretty", which is the tab size. If 0 or less
     // the compact form will be used.
-    char* dump(minion_value source, int pretty);
+    char* dump(MinionValue source, int pretty);
     //char* dump(minion_value source, int depth);
  
     //TODO?
@@ -155,16 +154,6 @@ public:
     void release();
 
 };
-
-// Free all buffers
-Minion::~Minion()
-{
-    free(read_buffer);
-    free(dump_buffer);
-    free(error_message);
-    free(remembered_items);
-    //TODO: macros should be freed on exit from read()
-}
 
 /* This might work for the macros ...
 #include <string>
@@ -283,27 +272,20 @@ void Minion::error(
     longjmp(recover, 2);
 }
 
-struct minion_pair
-{
-    minion_value key;
-    minion_value value;
-};
-
 // Free the memory used for a minion item.
-void minion_free(
-    minion_value mitem)
+MinionValue::~MinionValue()
 {
-    if (mitem.flags & F_MACRO_VALUE)
+    if (size == 0 || (flags & F_MACRO_VALUE) != 0)
         return;
-    if (mitem.type == T_Array) {
-        minion_value* p = (minion_value*) mitem.data;
-        msize n = mitem.size;
+    if (type == T_Array) {
+        MinionValue* p = (MinionValue*) data;
+        msize n = size;
         for (msize i = 0; i < n; ++i) {
             minion_free(p[i]);
         }
-    } else if (mitem.type == T_PairArray) {
-        minion_pair* p = (minion_pair*) mitem.data;
-        msize n = mitem.size;
+    } else if (type == T_PairArray) {
+        minion_pair* p = (minion_pair*) data;
+        msize n = size;
         for (msize i = 0; i < n; ++i) {
             minion_pair mp = p[i];
             minion_free(mp.key);
@@ -313,7 +295,7 @@ void minion_free(
     // Free the memory pointed to directly by the data field. This will
     // collect the actual array storage from the above items or the
     // character storage for strings, etc.
-    free(mitem.data);
+    free(data);
     // free() does nothing if the address it gets is NULL. But if
     // non-pointer types should be used sometime with values in the
     // data field, a further type/flag test would be needed to avoid
@@ -332,7 +314,7 @@ void free_macros(
     }
 }
 
-minion_value* Minion::find_macro(
+MinionValue* Minion::find_macro(
     char* name)
 {
     macro_node* mp = macros;
@@ -364,19 +346,18 @@ void Minion::tidy_dump()
     dump_buffer_index = 0;
 }
 
-bool minion_isString(
-    minion_value v)
+bool MinionValue::is_string()
 {
-    return (v.type == T_String);
+    return (type == T_String);
 }
 
 void Minion::remember(
-    minion_value minion_item)
+    MinionValue minion_item)
 {
     if (remembered_items_index == remembered_items_size) {
         // Need more space
         int n = remembered_items_size + remembered_items_size_increment;
-        minion_value* tmp = (minion_value*) realloc(remembered_items, n * sizeof(minion_value));
+        MinionValue* tmp = (MinionValue*) realloc(remembered_items, n * sizeof(MinionValue));
         if (tmp == NULL) {
             // alloc failed
             free(remembered_items);
@@ -399,42 +380,74 @@ void Minion::release()
 
 // --- END: Keep track of "unbound" malloced items ---
 
+// +++ MinionValue constructors
+
+// Build a null MinionValue.
+MinionValue::MinionValue()
+    :type{0}, flags{0}, size{0}, data{0} {}
+
+// Build a MinionValue from explicit field values.
+MinionValue::MinionValue(
+    short type,
+    short flags,
+    msize size,
+    void* data)
+    : type{type}, flags{flags}, size{size}, data{data} {}
+
 // Build a new ("normal") minion string item from the given char*.
-// It (eventually) needs to be freed with free_item().
-minion_value new_minion_string(const char* text)
+// The source bytes are copied, including the trailing 0.
+MinionValue::MinionValue(const char* text, bool simple)
+    : type{T_String}
+    , flags{static_cast<short>(simple ? F_Simple_String : F_NoFlags)}
 {
-    unsigned int l = strlen(text);
-    void* s = malloc(sizeof(char) * (l + 1));
+    size = strlen(text);
+    void* s = malloc(sizeof(char) * (++size));
     if (!s)
         exit(1);
-    memcpy(s, text, l + 1);
-    return minion_value{T_String, F_NoFlags, l, s};
+    memcpy(s, text,  + 1);
 }
 
-// Build a new String item from a char*. Place the result on the
-// remember stack.
-void Minion::new_String(
-    const char* text, minion_Type stype, minion_Flags sflags)
+//TODO: This can't work like this of course – how does it get to the
+// Minion stuff?
+// Build a new minion list item from the arguments, which are MinionValues.
+// The source data (referenced by the data fields) is not copied, thus
+// the new list takes on ownership if its not-owner flags are clear.
+MinionValue::MinionValue(std::initializer_list<MinionValue> items)
 {
-    // Remember "+1" for 0-terminator
-    unsigned int l = strlen(text);
-    void* s = malloc(sizeof(char) * (l + 1));
-    if (!s)
-        exit(1);
-    memcpy(s, text, l + 1);
-    remember((minion_value) {(short)stype, (short) sflags, l, s});
+    auto start_index = remembered_items_index;
+    for (const auto& item : items) {
+        remember(item);
+    }
+    return new_Array(start_index);
 }
 
-// Build a new Array item from items on the stack, the starting index
+// Build a new minion map item from the given referenced minion_pair items.
+// The source data (referenced by the data fields) is not copied, thus
+// the new list takes on ownership if its not-owner flags are clear.
+MinionValue::MinionValue(minion_pair* pairs, int size)
+{
+    //TODO
+}
+
+// Free all buffers
+Minion::~Minion()
+{
+    free(read_buffer);
+    free(dump_buffer);
+    free(error_message);
+    free(remembered_items);
+    //TODO: macros should be freed on exit from read()
+}
+
+// Build a new list item from items on the stack, the starting index
 // being passed as argument.
-// Place the result on the remember stack.
-void Minion::new_Array(
+MinionValue Minion::new_Array(
     int start_index)
 {
     void* a = 0;
     int len = remembered_items_index - start_index;
     if (len > 0) {
-        size_t nbytes = sizeof(minion_value) * len;
+        size_t nbytes = sizeof(MinionValue) * len;
         a = malloc(nbytes);
         if (!a)
             exit(1);
@@ -445,7 +458,7 @@ void Minion::new_Array(
         fputs("[BUG] In new_Array: remembered_items_index < start_index", stderr);
         exit(100);
     }
-    remember((minion_value) {T_Array, 0, (msize) len, a});
+    return MinionValue(T_Array, 0, (msize) len, a);
 }
 
 // Build a new PairArray item from items on the stack, the starting index
@@ -474,7 +487,7 @@ void Minion::new_PairArray(
         fputs("[BUG] In new_PairArray: remembered_items_index < start_index", stderr);
         exit(100);
     }
-    remember((minion_value) {T_PairArray, 0, (msize) len, a});
+    remember((MinionValue) {T_PairArray, 0, (msize) len, a});
 }
 
 position Minion::here()
@@ -667,7 +680,7 @@ minion_Type Minion::get_string()
     }
     // Add 0-terminator
     add_to_read_buffer(0);
-    new_String(read_buffer, T_String, F_NoFlags);
+    remember(MinionValue(read_buffer));
     return T_String;
 }
 
@@ -701,11 +714,11 @@ minion_Type Minion::get_list()
             exit(3); // unreachable
         }
     }
-    new_Array(start_index);
+    remember(new_Array(start_index));
     return T_Array;
 }
 
-minion_value Minion::last_item()
+MinionValue Minion::last_item()
 {
     if (remembered_items_index) {
         return remembered_items[remembered_items_index - 1];
@@ -822,22 +835,26 @@ short Minion::get_item()
             add_to_read_buffer(0);
             // Check whether macro name
             if (*read_buffer == '&') {
-                minion_value* mm = find_macro(read_buffer);
+                MinionValue* mm = find_macro(read_buffer);
                 if (mm) {
                     // Push to remember stack, marking it as not the owner of
                     // its data
                     remember(
-                        (minion_value) {mm->type, (short)(mm->flags + F_MACRO_VALUE), mm->size, mm->data});
+                        (MinionValue) {mm->type, (short)(mm->flags + F_MACRO_VALUE), mm->size, mm->data});
                     result = mm->type;
                     break;
                 }
                 // An undefined macro name
-                new_String(read_buffer, T_NoType, F_Macro);
+                remember(MinionValue(
+                    T_NoType, 
+                    F_Macro, 
+                    static_cast<unsigned int>(read_buffer_index), 
+                    read_buffer));
                 result = F_Macro;
                 break;
             }
             // A String without delimiters
-            new_String(read_buffer, T_String, F_Simple_String);
+            remember(MinionValue(read_buffer, true));
             result = T_String;
             break;
         }
@@ -923,7 +940,7 @@ short Minion::get_item()
 }
 
 //TODO: Adapt to loss of minion_doc!
-minion_value Minion::read(
+MinionValue Minion::read(
     const char* input)
 {
     if (macros) {
@@ -944,10 +961,11 @@ minion_value Minion::read(
         free_macros(macros);
         macros = NULL;
         // Prepare error message
-        new_String(error_message, T_NoType, F_Error);
-        minion_value m = *remembered_items;
-        remembered_items_index = 0;
-        return (minion_doc) {{T_NoType, F_NoFlags, 0, 0}, m, NULL};
+        return MinionValue(
+            T_NoType, 
+            F_Error | F_MACRO_VALUE, // not owner of the string 
+            strlen(error_message), 
+            error_message);
     }
 
     while (true) {
@@ -988,8 +1006,8 @@ minion_value Minion::read(
             if (mtype == F_Token_Comma) {
                 // Add the macro, taking on ownership of the
                 // allocated memory
-                minion_value mname = remembered_items[0];
-                minion_value mval = remembered_items[1];
+                MinionValue mname = remembered_items[0];
+                MinionValue mval = remembered_items[1];
                 remembered_items_index = 0;
                 macro_node* a = (macro_node*) malloc(sizeof(macro_node));
                 if (!a)
@@ -1005,7 +1023,7 @@ minion_value Minion::read(
         exit(3); // unreachable
     }
     // "Real" minion item, not macro definition => document content
-    minion_value m = *remembered_items;
+    MinionValue m = *remembered_items;
     remembered_items_index = 0;
     minion_doc doc = {m, {T_NoType, F_NoFlags, 0, NULL}, macros};
     macros = NULL;
@@ -1028,7 +1046,7 @@ minion_value Minion::read(
 }
 
 char* minion_error(
-    minion_value m)
+    MinionValue m)
 {
     return (char*) (m.flags == F_Error ? m.data : NULL);
 }
@@ -1118,7 +1136,7 @@ void Minion::dump_pad(
 }
 
 bool Minion::dump_list(
-    minion_value source, int depth)
+    MinionValue source, int depth)
 {
     int pad = -1;
     int new_depth = -1;
@@ -1128,7 +1146,7 @@ bool Minion::dump_list(
     dump_ch('[');
     for (msize i = 0; i < source.size; ++i) {
         dump_pad(pad);
-        if (!dump_value(((minion_value*) source.data)[i], new_depth))
+        if (!dump_value(((MinionValue*) source.data)[i], new_depth))
             return false;
         dump_ch(',');
     }
@@ -1139,7 +1157,7 @@ bool Minion::dump_list(
 }
 
 bool Minion::dump_map(
-    minion_value source, int depth)
+    MinionValue source, int depth)
 {
     int pad = -1;
     int new_depth = -1;
@@ -1167,7 +1185,7 @@ bool Minion::dump_map(
 }
 
 bool Minion::dump_value(
-    minion_value source, int depth)
+    MinionValue source, int depth)
 {
     bool ok = true;
     switch (source.type) {
@@ -1188,7 +1206,7 @@ bool Minion::dump_value(
 }
 
 char* Minion::dump(
-    minion_value source, int depth)
+    MinionValue source, int depth)
 {
     clear_dump_buffer();
     if (dump_value(source, depth)) {
@@ -1200,26 +1218,14 @@ char* Minion::dump(
 
 // *** Construction functions ...
 
-minion_value Minion::pop_remembered()
+MinionValue Minion::pop_remembered()
 {
     return remembered_items[--remembered_items_index];
 }
 
-// Build a new list item from the arguments, which are of type minion_value.
-// It (eventually) needs to be freed with free_item().
-minion_value Minion::new_minion_array(std::initializer_list<minion_value> items)
-{
-    auto start_index = remembered_items_index;
-    for (const auto& item : items) {
-        remember(item);
-    }
-    new_Array(start_index);
-    return pop_remembered();
-}
-
 // Build a new map item from the arguments, which are pair_input items.
 // It (eventually) needs to be freed with free_item().
-minion_value Minion::new_minion_map(std::initializer_list<pair_input> items)
+MinionValue Minion::new_minion_map(std::initializer_list<pair_input> items)
 {
     auto start_index = remembered_items_index;
     for (const auto& item : items) {

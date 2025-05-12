@@ -116,8 +116,6 @@ class Minion
     void error(const char* msg, ...);
     MinionValue* find_macro(char* name);
     void remember(MinionValue minion_item);
-    MinionValue new_Array(int start_index);
-    void new_PairArray(int start_index);
     position here();
     char* pos(position p);
     char read_ch(bool instring);
@@ -135,8 +133,6 @@ class Minion
     bool dump_map(MinionValue source, int depth);
     bool dump_value(MinionValue source, int depth);
     MinionValue pop_remembered();
-    MinionValue new_minion_array(std::initializer_list<MinionValue> items);
-    MinionValue new_minion_map(std::initializer_list<pair_input> items);
 
 public:
 
@@ -144,6 +140,9 @@ public:
 
     MinionValue read(const char* input);
     
+    MinionValue new_array(std::initializer_list<MinionValue> items);
+    MinionValue new_map(std::initializer_list<pair_input> items);
+
     //TODO: Change to use "pretty", which is the tab size. If 0 or less
     // the compact form will be used.
     char* dump(MinionValue source, int pretty);
@@ -407,27 +406,37 @@ MinionValue::MinionValue(const char* text, bool simple)
     memcpy(s, text,  + 1);
 }
 
-//TODO: This can't work like this of course – how does it get to the
-// Minion stuff?
 // Build a new minion list item from the arguments, which are MinionValues.
 // The source data (referenced by the data fields) is not copied, thus
-// the new list takes on ownership if its not-owner flags are clear.
-MinionValue::MinionValue(std::initializer_list<MinionValue> items)
+// the new list takes on ownership if the "not-owner" flags of the data
+// are clear.
+MinionValue Minion::new_array(std::initializer_list<MinionValue> items)
 {
     auto start_index = remembered_items_index;
     for (const auto& item : items) {
         remember(item);
     }
-    return new_Array(start_index);
+    auto m = MinionValue(&remembered_items[start_index],
+        remembered_items_index - start_index);
+    remembered_items_index = start_index;
+    return m;
 }
 
 // Build a new minion map item from the given referenced minion_pair items.
 // The source data (referenced by the data fields) is not copied, thus
-// the new list takes on ownership if its not-owner flags are clear.
-MinionValue::MinionValue(minion_pair* pairs, int size)
+// the new map takes on ownership if the "not-owner" flags of the data
+// are clear.
+MinionValue Minion::new_map(std::initializer_list<minion_pair> items)
 {
-    //TODO
+    auto start_index = remembered_items_index;
+    for (const auto& item : items) {
+        remember(new_minion_string(item.key));
+        remember(item.value);
+    }
+    new_PairArray(start_index);
+    return pop_remembered();
 }
+
 
 // Free all buffers
 Minion::~Minion()
@@ -439,6 +448,7 @@ Minion::~Minion()
     //TODO: macros should be freed on exit from read()
 }
 
+//TODO-- deprecated
 // Build a new list item from items on the stack, the starting index
 // being passed as argument.
 MinionValue Minion::new_Array(
@@ -714,7 +724,8 @@ minion_Type Minion::get_list()
             exit(3); // unreachable
         }
     }
-    remember(new_Array(start_index));
+    remember(MinionValue(remembered_items,
+        remembered_items_index - start_index));
     return T_Array;
 }
 
@@ -1221,19 +1232,6 @@ char* Minion::dump(
 MinionValue Minion::pop_remembered()
 {
     return remembered_items[--remembered_items_index];
-}
-
-// Build a new map item from the arguments, which are pair_input items.
-// It (eventually) needs to be freed with free_item().
-MinionValue Minion::new_minion_map(std::initializer_list<pair_input> items)
-{
-    auto start_index = remembered_items_index;
-    for (const auto& item : items) {
-        remember(new_minion_string(item.key));
-        remember(item.value);
-    }
-    new_PairArray(start_index);
-    return pop_remembered();
 }
 
 /* Use of initializer_list:

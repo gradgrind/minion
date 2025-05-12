@@ -46,7 +46,7 @@ class MinionValue
 public:
     MinionValue(); // null value constructor
     MinionValue(const char* text, bool simple = false); // string constructor
-    MinionValue(std::initializer_list<MinionValue> items); // list constructor
+    MinionValue(MinionValue* items, int size); // list constructor
     MinionValue(minion_pair* pairs, int size); // map constructor
     ~MinionValue();
     bool is_string();

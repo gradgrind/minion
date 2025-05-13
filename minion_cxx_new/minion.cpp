@@ -141,7 +141,7 @@ public:
     MinionValue read(const char* input);
     
     MinionValue new_array(std::initializer_list<MinionValue> items);
-    MinionValue new_map(std::initializer_list<pair_input> items);
+    MinionValue new_map(std::initializer_list<MinionValue> items);
 
     //TODO: Change to use "pretty", which is the tab size. If 0 or less
     // the compact form will be used.
@@ -283,12 +283,10 @@ MinionValue::~MinionValue()
             minion_free(p[i]);
         }
     } else if (type == T_PairArray) {
-        minion_pair* p = (minion_pair*) data;
-        msize n = size;
+        MinionValue* p = (MinionValue*) data;
+        msize n = size * 2;
         for (msize i = 0; i < n; ++i) {
-            minion_pair mp = p[i];
-            minion_free(mp.key);
-            minion_free(mp.value);
+            minion_free(p[i]);
         }
     }
     // Free the memory pointed to directly by the data field. This will
@@ -417,7 +415,7 @@ MinionValue Minion::new_array(std::initializer_list<MinionValue> items)
         remember(item);
     }
     auto m = MinionValue(&remembered_items[start_index],
-        remembered_items_index - start_index);
+        remembered_items_index - start_index, false);
     remembered_items_index = start_index;
     return m;
 }
@@ -426,15 +424,16 @@ MinionValue Minion::new_array(std::initializer_list<MinionValue> items)
 // The source data (referenced by the data fields) is not copied, thus
 // the new map takes on ownership if the "not-owner" flags of the data
 // are clear.
-MinionValue Minion::new_map(std::initializer_list<minion_pair> items)
+MinionValue Minion::new_map(std::initializer_list<MinionValue> items)
 {
     auto start_index = remembered_items_index;
     for (const auto& item : items) {
-        remember(new_minion_string(item.key));
-        remember(item.value);
+        remember(item);
     }
-    new_PairArray(start_index);
-    return pop_remembered();
+    auto m = MinionValue(&remembered_items[start_index],
+        remembered_items_index - start_index, true);
+    remembered_items_index = start_index;
+    return m;
 }
 
 
@@ -448,11 +447,14 @@ Minion::~Minion()
     //TODO: macros should be freed on exit from read()
 }
 
-//TODO-- deprecated
-// Build a new list item from items on the stack, the starting index
-// being passed as argument.
-MinionValue Minion::new_Array(
-    int start_index)
+//TODO conversion ...    
+// Build a new list/map item from the given array of MinionValue items.
+// For a map, the items are regarded as pairs (so there must be an even
+// number) of which the first item must be a string.
+MinionValue::MinionValue(MinionValue* items, int size, bool map)
+
+//MinionValue Minion::new_Array(
+//    int start_index)
 {
     void* a = 0;
     int len = remembered_items_index - start_index;

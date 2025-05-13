@@ -26,7 +26,7 @@
  * automatically. Perhaps this should count as a parsing error?
 */
 
-struct minion_pair; // forward declaration
+//TODO-- struct minion_pair; // forward declaration
 
 //TODO: This needs a destructor to free the memory (recursively).
 //TODO: This needs a find() method to do key lookup in a map (fail if not
@@ -46,8 +46,8 @@ class MinionValue
 public:
     MinionValue(); // null value constructor
     MinionValue(const char* text, bool simple = false); // string constructor
-    MinionValue(MinionValue* items, int size); // list constructor
-    MinionValue(minion_pair* pairs, int size); // map constructor
+    // list/map constructor:
+    MinionValue(MinionValue* items, int size, bool map = false);
     ~MinionValue();
     bool is_string();
     bool is_list();
@@ -55,11 +55,13 @@ public:
     MinionValue find(const char* key);
 };
 
+/*TODO--
 struct minion_pair
 {
     MinionValue key;
     MinionValue value;
 };
+*/
 
 // The result must be freed when it is no longer needed
 MinionValue minion_read(const char* input);

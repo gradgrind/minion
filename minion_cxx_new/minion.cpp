@@ -68,6 +68,13 @@ typedef enum {
  * at some time, so for this purpose there is the function minion_tidy().
 */
 
+struct minion_map_item {
+    MinionValue key;
+    MinionValue value;
+//TDDO?
+//    minion_map_item(char* k, MinionValue v) : key{k}, value{v} {}
+};
+
 class Minion
 {
     // For character-by-character reading. These point to memory which is
@@ -141,7 +148,7 @@ public:
     MinionValue read(const char* input);
     
     MinionValue new_array(std::initializer_list<MinionValue> items);
-    MinionValue new_map(std::initializer_list<MinionValue> items);
+    MinionValue new_map(std::initializer_list<minion_map_item> items);
 
     //TODO: Change to use "pretty", which is the tab size. If 0 or less
     // the compact form will be used.
@@ -420,15 +427,16 @@ MinionValue Minion::new_array(std::initializer_list<MinionValue> items)
     return m;
 }
 
-// Build a new minion map item from the given referenced minion_pair items.
-// The source data (referenced by the data fields) is not copied, thus
-// the new map takes on ownership if the "not-owner" flags of the data
-// are clear.
-MinionValue Minion::new_map(std::initializer_list<MinionValue> items)
+// Build a new minion map from the given minion_map items.
+// The source data of the value items (referenced by the data fields) is
+// not copied, thus the new map takes on ownership if the "not-owner" flags
+// of the data are clear.
+MinionValue Minion::new_map(std::initializer_list<minion_map_item> items)
 {
     auto start_index = remembered_items_index;
     for (const auto& item : items) {
-        remember(item);
+        remember(item.key);
+        remember(item.value);
     }
     auto m = MinionValue(&remembered_items[start_index],
         remembered_items_index - start_index, true);
@@ -447,59 +455,44 @@ Minion::~Minion()
     //TODO: macros should be freed on exit from read()
 }
 
-//TODO conversion ...    
 // Build a new list/map item from the given array of MinionValue items.
 // For a map, the items are regarded as pairs (so there must be an even
 // number) of which the first item must be a string.
-MinionValue::MinionValue(MinionValue* items, int size, bool map)
-
-//MinionValue Minion::new_Array(
-//    int start_index)
+// The len argument is always the number of MinionValue items.
+MinionValue::MinionValue(MinionValue* items, int len, bool map)
 {
+    if (len < 0) {
+        throw MinionError(
+            "In MinionValue list/map constructor: negative length");
+    }
+    if (map) {
+        if ((len & 1) != 0) {
+            throw MinionError(
+                "In MinionValue map constructor: odd number of elements");
+        }
+        // Check that all keys are strings
+        for (int i = 0; i < len; i += 2) {
+            if (items[i].type != T_String) {
+            throw MinionError(
+                "In MinionValue map constructor: key not string");
+           }
+        }
+        type = T_PairArray;
+        size = len / 2;
+    } else {
+        type = T_Array;
+        size = len;
+    }
+    flags = F_NoFlags;
     void* a = 0;
-    int len = remembered_items_index - start_index;
     if (len > 0) {
         size_t nbytes = sizeof(MinionValue) * len;
         a = malloc(nbytes);
         if (!a)
             exit(1);
-        memcpy(a, &remembered_items[start_index], nbytes);
-        // Remove the component items before the Array item is addded.
-        remembered_items_index = start_index;
-    } else if (len < 0) {
-        fputs("[BUG] In new_Array: remembered_items_index < start_index", stderr);
-        exit(100);
+        memcpy(a, items, nbytes);
     }
-    return MinionValue(T_Array, 0, (msize) len, a);
-}
-
-// Build a new PairArray item from items on the stack, the starting index
-// being passed as argument.
-// Place the result on the remember stack.
-void Minion::new_PairArray(
-    int start_index)
-{
-    void* a = 0;
-    int len = remembered_items_index - start_index;
-    if (len & 1) {
-        // Each entry is a pair, i.e. it consists of two items.
-        fputs("[BUG] In new_PairArray: odd number of items on stack", stderr);
-        exit(100);
-    }
-    if (len > 0) {
-        len /= 2; // A key/value pair makes up one Pair item
-        size_t nbytes = sizeof(minion_pair) * len;
-        a = malloc(nbytes);
-        if (!a)
-            exit(1);
-        memcpy(a, &remembered_items[start_index], nbytes);
-        // Remove the component items before the PairArray item is addded.
-        remembered_items_index = start_index;
-    } else if (len < 0) {
-        fputs("[BUG] In new_PairArray: remembered_items_index < start_index", stderr);
-        exit(100);
-    }
-    remember((MinionValue) {T_PairArray, 0, (msize) len, a});
+    data = a;
 }
 
 position Minion::here()
@@ -803,7 +796,11 @@ minion_Type Minion::get_map()
         error(seeking, pos(current_pos));
         exit(3); // unreachable
     }
-    new_PairArray(start_index);
+    auto m = MinionValue(&remembered_items[start_index],
+        remembered_items_index - start_index,
+        true);
+    remembered_items_index = start_index;
+    remember(m);
     return T_PairArray;
 }
 
@@ -1058,10 +1055,10 @@ MinionValue Minion::read(
     // they are no longer needed – see function minion_tidy().
 }
 
-char* minion_error(
-    MinionValue m)
+//TODO: Rather use exception?
+char* MinionValue::error_message()
 {
-    return (char*) (m.flags == F_Error ? m.data : NULL);
+    return (char*) (flags == F_Error ? data : NULL);
 }
 
 void Minion::dump_string(
@@ -1172,22 +1169,23 @@ bool Minion::dump_list(
 bool Minion::dump_map(
     MinionValue source, int depth)
 {
+    msize len = source.size * 2;
     int pad = -1;
     int new_depth = -1;
     if (depth >= 0)
         new_depth = depth + 1;
     pad = new_depth * indent;
     dump_ch('{');
-    for (msize i = 0; i < source.size; ++i) {
+    for (msize i = 0; i < len; ++i) {
         dump_pad(pad);
-        minion_pair mp = ((minion_pair*) source.data)[i];
-        if (mp.key.type != T_String)
+        auto key = source.data[i];
+        if (key.type != T_String)
             return false;
-        dump_string((char*) mp.key.data);
+        dump_string((char*) key.data);
         dump_ch(':');
         if (depth >= 0)
             dump_ch(' ');
-        if (!dump_value(mp.value, new_depth))
+        if (!dump_value(source.data[++i], new_depth))
             return false;
         dump_ch(',');
     }

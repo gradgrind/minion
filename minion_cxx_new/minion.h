@@ -2,6 +2,7 @@
 #define MINION_H
 
 #include <initializer_list>
+#include <stdexcept>
 
 //TODO: Adapt to new Minion class ...
 
@@ -52,6 +53,7 @@ public:
     bool is_string();
     bool is_list();
     bool is_map();
+    char* error_message();
     MinionValue find(const char* key);
 };
 
@@ -104,5 +106,13 @@ struct pair_input // needed only for construction of maps in new_minion_map
 
 //TODO ... how? MinionValue constructor? ... needs Minion item access ...
 MinionValue new_minion_map(std::initializer_list<pair_input> items);
+
+class MinionError : public std::runtime_error {
+public:
+	// Using constructor for passing custom message
+	MinionError(const std::string& message)
+        : runtime_error(message) {}
+};
+
 
 #endif // MINION_H

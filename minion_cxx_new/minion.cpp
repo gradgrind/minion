@@ -12,16 +12,6 @@
 
 namespace minion {
 
-//TODO-- #define position_size 20
-
-// Node for building the macro map as a linked list
-struct macro_node
-{
-    char* name;
-    struct macro_node* next;
-    MinionValue value;
-};
-
 /* All the values in minion_Flags (apart from the null F_NoFlags) are
  * greater than the highest value in minion_Type, so that when type is
  * T_NoType the flags value can be used instead without ambiguity.
@@ -216,7 +206,7 @@ MinionValue* Minion::find_macro(
         }
         mp = mp->next;
     }
-    return NULL;
+    return nullptr;
 }
 
 bool real_minion_value(
@@ -250,7 +240,7 @@ void Minion::remember(
         // Need more space
         int n = remembered_items_size + remembered_items_size_increment;
         MinionValue* tmp = (MinionValue*) realloc(remembered_items, n * sizeof(MinionValue));
-        if (tmp == NULL) {
+        if (tmp == nullptr) {
             // alloc failed
             free(remembered_items);
             exit(1);
@@ -340,6 +330,7 @@ Minion::~Minion()
 {
     free(read_buffer);
     free(dump_buffer);
+    //TODO: Is this enough? What if remembered_items is not empty?
     free(remembered_items);
     //TODO: macros should be freed on exit from read()
 }
@@ -442,6 +433,7 @@ char Minion::read_ch(
         .append(to_hex(ch, 2))
         .append(" at position ")
         .append(pos(here())));
+    return 0; // unreachable
 }
 
 void Minion::unread_ch()
@@ -514,7 +506,7 @@ bool Minion::add_unicode_to_read_buffer(
  *
  * Return the string as a minion_value.
  */
-minion_Type Minion::get_string()
+int Minion::get_string()
 {
     position start_pos = here();
     char ch;
@@ -598,7 +590,7 @@ minion_Type Minion::get_string()
     return T_String;
 }
 
-minion_Type Minion::get_list()
+int Minion::get_list()
 {
     int start_index = remembered_items_index;
     position current_pos = here();
@@ -659,7 +651,7 @@ bool Minion::is_key_unique(
     return true;
 }
 
-minion_Type Minion::get_map()
+int Minion::get_map()
 {
     int start_index = remembered_items_index;
     position current_pos = here();
@@ -728,7 +720,7 @@ minion_Type Minion::get_map()
  * Strings are read into a buffer, which grows if it is too small.
  * Compound items are constructed by reading their components onto a stack.
 */
-short Minion::get_item()
+int Minion::get_item()
 {
     char ch;
     reset_read_buffer_index();
@@ -871,116 +863,115 @@ MinionValue Minion::read(
     const char* input)
 {
     if (macros) {
-        fputs("[BUG] macros list not cleared", stderr);
-        exit(100);
+        throw "[minion BUG] macros list not cleared";
     }
     ch_pointer0 = input;
     ch_pointer = input;
     ch_linestart = input;
     line_index = 0;
-    if (setjmp(recover)) {
-        // Free redundant malloced items
+
+    try {
+        while (true) {
+            position current_position = here();
+            short mtype = get_item();
+            if (mtype != F_Macro) {
+                if (last_item().flags & F_NOT_OWNER) {
+                    error(std::string("Position ")
+                        .append(pos(current_position))
+                        .append(": macro value at top level ... redefining?"));
+                } else if (real_minion_value(mtype)) {
+                    // found document item
+                    break;
+                }
+                // Invalid item
+                if (mtype == F_Token_End) {
+                    error("Document contains no main item");
+                }
+                error(std::string(
+                    "Invalid minion item at position ")
+                    .append(pos(current_position)));
+            }
+            // *** macro name: read the definition ***
+            // Check for duplicate
+            current_position = here();
+            // expect ':'
+            mtype = get_item();
+            if (mtype != F_Token_Colon) {
+                error(std::string(
+                    "Expecting ':' in macro definition at position ")
+                    .append(pos(current_position)));
+            }
+            current_position = here();
+            mtype = get_item();
+            // expect value
+            if (real_minion_value(mtype)) {
+                // expect ','
+                mtype = get_item();
+                if (mtype == F_Token_Comma) {
+                    // Add the macro, taking on ownership of the
+                    // allocated memory
+                    MinionValue mname = remembered_items[0];
+                    MinionValue mval = remembered_items[1];
+                    remembered_items_index = 0;
+                    macro_node* a = (macro_node*) malloc(sizeof(macro_node));
+                    if (!a)
+                        exit(1);
+                    *a = (macro_node) {(char*) mname.data, macros, mval};
+                    macros = a;
+                    continue;
+                }
+                error(std::string(
+                    "After macro definition: expecting ',' at position ")
+                    .append(pos(current_position)));
+            }
+            error(std::string(
+                "In macro definition, expecting a value at position ")
+                .append(pos(current_position)));
+        }
+        // "Real" minion item, not macro definition, found.
+        // This should be the document content.
+        MinionValue m = *remembered_items;
+        remembered_items_index = 0;
+
+        // Free the space used by macros.
+        //TODO: unused macros may be an error?
+        free_macros(macros);
+        macros = nullptr;
+
+        //TODO???
+
+        // Check that there are no further items
+        position current_position = here();
+        if (get_item() != F_Token_End) {
+            delete (&m); //TODO: Is this a double delete?
+            error(std::string(
+                "Position ")
+                .append(pos(current_position))
+                .append(": unexpected item after document item"));
+        }
+
+        return m;
+        // NOTE:
+        //TODO??? Is the use of delete on MinionValues (their addresses!)
+        // correct?
+        
+        // The result will need to be freed with minion_free() at some point
+        // by the caller.
+        // Also the buffers error_message, read_buffer and remembered_items
+        // have malloced memory, which should be freed (the normal free()) if
+        // they are no longer needed – see function minion_tidy().
+
+    } catch (MinionError& e) {
+        // Free any remembered items
         for (int i = 0; i < remembered_items_index; ++i) {
-            minion_free(remembered_items[i]);
+            delete (&remembered_items[i]);
         }
         remembered_items_index = 0;
         // Free any macros
         free_macros(macros);
-        macros = NULL;
-        // Prepare error message
-        return MinionValue(
-            T_NoType, 
-            F_Error | F_NOT_OWNER, // not owner of the string 
-            strlen(error_message), 
-            error_message);
+        macros = nullptr;
+        throw;
     }
-
-    while (true) {
-        position current_position = here();
-        short mtype = get_item();
-        if (mtype != F_Macro) {
-            if (last_item().flags & F_NOT_OWNER) {
-                error(std::string("Position ")
-                    .append(pos(current_position))
-                    .append(": macro value at top level ... redefining?"));
-            } else if (real_minion_value(mtype)) {
-                // found document item
-                break;
-            }
-            // Invalid item
-            if (mtype == F_Token_End) {
-                error("Document contains no main item");
-            }
-            error(std::string(
-                "Invalid minion item at position ")
-                .append(pos(current_position)));
-        }
-        // *** macro name: read the definition ***
-        // Check for duplicate
-        current_position = here();
-        // expect ':'
-        mtype = get_item();
-        if (mtype != F_Token_Colon) {
-            error(std::string(
-                "Expecting ':' in macro definition at position ")
-                .append(pos(current_position)));
-        }
-        current_position = here();
-        mtype = get_item();
-        // expect value
-        if (real_minion_value(mtype)) {
-            // expect ','
-            mtype = get_item();
-            if (mtype == F_Token_Comma) {
-                // Add the macro, taking on ownership of the
-                // allocated memory
-                MinionValue mname = remembered_items[0];
-                MinionValue mval = remembered_items[1];
-                remembered_items_index = 0;
-                macro_node* a = (macro_node*) malloc(sizeof(macro_node));
-                if (!a)
-                    exit(1);
-                *a = (macro_node) {(char*) mname.data, macros, mval};
-                macros = a;
-                continue;
-            }
-            error(std::string(
-                "After macro definition: expecting ',' at position ")
-                .append(pos(current_position)));
-        }
-        error(std::string(
-            "In macro definition, expecting a value at position ")
-            .append(pos(current_position)));
-    }
-    // "Real" minion item, not macro definition => document content
-    MinionValue m = *remembered_items;
-    remembered_items_index = 0;
-    minion_doc doc = {m, {T_NoType, F_NoFlags, 0, NULL}, macros};
-    macros = NULL;
-
-    // Check that there are no further items
-    position current_position = here();
-    if (get_item() != F_Token_End) {
-        minion_free(doc);
-        error(std::string(
-            "Position ")
-            .append(pos(current_position))
-            .append(": unexpected item after document item"));
-    }
-
-    return doc;
-    // NOTE:
-    // The result will need to be freed with minion_free() at some point
-    // by the caller.
-    // Also the buffers error_message, read_buffer and remembered_items
-    // have malloced memory, which should be freed (the normal free()) if
-    // they are no longer needed – see function minion_tidy().
-}
-
-//TODO: Rather use exception?
-char* MinionValue::error_message()
-{
-    return (char*) (flags == F_Error ? data : NULL);
 }
 
 void Minion::dump_string(
@@ -1100,14 +1091,14 @@ bool Minion::dump_map(
     dump_ch('{');
     for (int i = 0; i < len; ++i) {
         dump_pad(pad);
-        auto key = source.data[i];
+        auto key = static_cast<MinionValue*>(source.data)[i];
         if (key.type != T_String)
             return false;
         dump_string((char*) key.data);
         dump_ch(':');
         if (depth >= 0)
             dump_ch(' ');
-        if (!dump_value(source.data[++i], new_depth))
+        if (!dump_value(static_cast<MinionValue*>(source.data)[++i], new_depth))
             return false;
         dump_ch(',');
     }
@@ -1124,7 +1115,7 @@ bool Minion::dump_value(
     switch (source.type) {
     case T_String:
         // Strings don't receive any extra formatting
-        dump_string((char*) source.data);
+        dump_string(static_cast<char*>(source.data));
         break;
     case T_Array:
         ok = dump_list(source, depth);
@@ -1149,12 +1140,14 @@ char* Minion::dump(
     return 0;
 }
 
+/*??
 // *** Construction functions ...
 
 MinionValue Minion::pop_remembered()
 {
     return remembered_items[--remembered_items_index];
 }
+*/
 
 } // End of namespace minion
 

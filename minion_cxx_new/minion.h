@@ -58,6 +58,14 @@ struct position
     int byte_ix;
 };
 
+// Node for building the macro map as a linked list
+struct macro_node
+{
+    char* name;
+    struct macro_node* next;
+    MinionValue value;
+};
+
 class Minion
 {
     // For character-by-character reading. These point to memory which is
@@ -113,12 +121,12 @@ class Minion
     char read_ch(bool instring);
     void unread_ch();
     bool add_unicode_to_read_buffer(int len);
-    minion_Type get_string();
-    minion_Type get_list();
+    int get_string();
+    int get_list();
     MinionValue last_item();
     bool is_key_unique(int i_start);
-    minion_Type get_map();
-    short get_item();
+    int get_map();
+    int get_item();
     void dump_string(const char* source);
     void dump_pad(int n);
     bool dump_list(MinionValue source, int depth);

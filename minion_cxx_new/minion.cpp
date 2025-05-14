@@ -772,7 +772,9 @@ int Minion::get_item()
                 break;
             }
             // A String without delimiters
-            remember(MinionValue(read_buffer, true));
+            auto m = MinionValue(read_buffer, true);
+            remember(m);
+            m.flags |= F_NOT_OWNER;
             result = T_String;
             break;
         }

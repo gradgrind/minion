@@ -6,18 +6,13 @@
 #include <cstring>
 #include <initializer_list>
 
-typedef unsigned int msize;
 #define read_buffer_size_increment 100
 #define dump_buffer_size_increment 1000
 #define remembered_items_size_increment 10
 
-// Used for recording read-position in input text
-struct position
-{
-    msize line_n;
-    msize byte_ix;
-};
-#define position_size 20
+namespace minion {
+
+//TODO-- #define position_size 20
 
 // Node for building the macro map as a linked list
 struct macro_node
@@ -35,7 +30,7 @@ struct macro_node
 typedef enum {
     F_NoFlags = 0,
     F_Simple_String = MIN_FLAG, // undelimited string
-    F_Error,
+    F_Error, // unused in this version
     F_Macro,
     F_Token_End,
     F_Token_String_Delim,
@@ -48,7 +43,7 @@ typedef enum {
 
     // This bit will be set if the data field refers to memory that this
     // item does not "own", i.e. it shouldn't be freed.
-    F_MACRO_VALUE = 32
+    F_NOT_OWNER = 32
 } minion_Flags;
 
 typedef enum {
@@ -59,107 +54,39 @@ typedef enum {
 } minion_Type;
 
 /* *** BUFFERS ***
- * minion uses buffers for various purposes. These get their space using
- * malloc and may grow when more space is needed.
- * This space is not freed, so that once a buffer has been created it can
- * be reused. Also at the end of a call to minion_read it is not
- * necessary to free the space, so that subsequent calls may not need to
- * reallocate the space. However, it may be desirable to free this space
- * at some time, so for this purpose there is the function minion_tidy().
-*/
+ * The Minion class allows reuse of the various buffers used in handling
+ * MINION. These buffers are allocated space according to their needs and, once
+ * this space has been allocated, it is retained for future use. This should
+ * help to avoid frequent allocations and deallocations. These buffers are
+ * deallocated by the Minion destructor.
+ */
 
-struct minion_map_item {
-    MinionValue key;
-    MinionValue value;
-//TDDO?
-//    minion_map_item(char* k, MinionValue v) : key{k}, value{v} {}
-};
-
-class Minion
-{
-    // For character-by-character reading. These point to memory which is
-    // not controlled by Minion, so they do not need freeing.
-    const char* ch_pointer0;
-    const char* ch_pointer;
-    const char* ch_linestart = 0;
-    msize line_index;
-
-    // read_buffer is used for constructinging strings before they are
-    // passed to minion_value items.
-    char* read_buffer = 0;
-    size_t read_buffer_size = 0;
-    size_t read_buffer_index = 0;
-
-    // dump_buffer is used for serializing a minion_value.
-    char* dump_buffer = 0;
-    int dump_buffer_size = 0;
-    int dump_buffer_index = 0;
-    int indent = 2; // pretty-print indentation
-
-    // Error handling
-    jmp_buf recover; // for error recovery
-
-    // error_message is a buffer used in reporting errors. The error message
-    // is stored here before being passed to a special minion_value (type
-    // T_Error).
-    char* error_message = 0;
-    int error_message_size = 0;
-    char position_buffer[position_size];
-
-    // Keep track of "unbound" minion items
-    // The buffer for these items is used as a stack.
-    MinionValue* remembered_items = 0;
-    int remembered_items_size = 0;
-    int remembered_items_index = 0;
-
-    // Manage the macros
-    macro_node* macros = NULL;
-
-    void reset_read_buffer_index();
-    void add_to_read_buffer(char ch);
-    void clear_dump_buffer();
-    void dump_ch(char ch);
-    void undump_ch();
-    void error(const char* msg, ...);
-    MinionValue* find_macro(char* name);
-    void remember(MinionValue minion_item);
-    position here();
-    char* pos(position p);
-    char read_ch(bool instring);
-    void unread_ch();
-    bool add_unicode_to_read_buffer(int len);
-    minion_Type get_string();
-    minion_Type get_list();
-    MinionValue last_item();
-    bool is_key_unique(int i_start);
-    minion_Type get_map();
-    short get_item();
-    void dump_string(const char* source);
-    void dump_pad(int n);
-    bool dump_list(MinionValue source, int depth);
-    bool dump_map(MinionValue source, int depth);
-    bool dump_value(MinionValue source, int depth);
-    MinionValue pop_remembered();
-
-public:
-
-    ~Minion();
-
-    MinionValue read(const char* input);
-    
-    MinionValue new_array(std::initializer_list<MinionValue> items);
-    MinionValue new_map(std::initializer_list<minion_map_item> items);
-
-    //TODO: Change to use "pretty", which is the tab size. If 0 or less
-    // the compact form will be used.
-    char* dump(MinionValue source, int pretty);
-    //char* dump(minion_value source, int depth);
- 
-    //TODO?
-    void tidy_dump();
-    void release();
-
-};
+/* *** Data sharing ***
+ * A further feature aimed at reducing allocations and deallocations is the
+ * sharing of data. MinionValue items have a data field which is a pointer to
+ * the actual data (which can currently be a string – 0-terminated character
+ * array – or an array of MinionValue items). Standard C++ strings and vectors
+ * are not used at present because they are a bit more "bulky" and are not
+ * really designed for this sort of use. Ownership of the referenced data is
+ * marked by a flag (or rather its absence!) in the MinionValue item flags
+ * field.
+ *
+ * *** Macros ***
+ * Macros use the shared-data feature to avoid having to copy their data.
+ * Immediately after definition they are stored as normal MinionValues in some
+ * sort of map so that they can be accessed by name. When a reference to a
+ * macro is found, its MinionValue will be copied, but not the memory pointed
+ * to by the data field (i.e. it is a shallow copy). As the structure is
+ * read-only, this should be no problem, the data fields are just shared.
+ * However, care must be taken when freeing the structure – that the memory
+ * is not freed twice. To handle this the "not owner" flag is used.
+ * After the first copy of the macro value, this flag is set (in the value
+ + in the macro map) so that subsequent copies are marked as "not owner".
+ * Thus ownership is transferred to the first reference.
+ * Should a macro never be referenced, the value in the macro map will still
+ * be the owner at the end of the parse. Such cases should then be freed
+ * automatically. Perhaps this should count as a parsing error?
+ */
 
 /* This might work for the macros ...
 #include <string>
@@ -222,18 +149,8 @@ void Minion::undump_ch()
 }
 
 void Minion::error(
-    const char* msg, ...)
+    std::string_view msg)
 {
-    va_list args;
-    va_start(args, msg);
-    // Get string size (add 1 for 0-terminator) without writing anything
-    int n = vsnprintf(0, 0, msg, args);
-    //int n = vsnprintf(error_message, error_message_size, msg, args);
-    if (n < 0) {
-        fprintf(stderr, "[BUG] Invalid error message: %s\n", msg);
-        exit(100);
-    }
-
     // Add most recently read characters
     const char* ch_start = ch_pointer0;
     int recent = ch_pointer - ch_start;
@@ -248,62 +165,33 @@ void Minion::error(
         }
         recent = ch_pointer - ch_start;
     }
-    int nx = n + recent + 10;
-    if (error_message_size < nx) {
-        free(error_message);
-        error_message = (char*) malloc(nx);
-        if (!error_message)
-            exit(1);
-        error_message_size = nx;
-    }
-
-    /*
-    if (error_message_size < ++n) {
-        free(error_message);
-        error_message = malloc(n);
-        if (!error_message)
-            exit(1);
-        error_message_size = n;
-    }
-    */
-
-    va_start(args, msg); // restart the argument reading
-    vsnprintf(error_message, error_message_size, msg, args);
-    va_end(args);
-
-    n += snprintf(error_message + n, 8, "\n ... ");
-    memcpy(error_message + n, ch_start, recent);
-    error_message[n + recent] = 0;
-
-    longjmp(recover, 2);
+    auto mx = std::string{msg}.append(
+        ch_start, recent);
+    throw MinionError(mx);
 }
 
 // Free the memory used for a minion item.
 MinionValue::~MinionValue()
 {
-    if (size == 0 || (flags & F_MACRO_VALUE) != 0)
+    if (size == 0 || (flags & F_NOT_OWNER) != 0)
         return;
     if (type == T_Array) {
         MinionValue* p = (MinionValue*) data;
-        msize n = size;
-        for (msize i = 0; i < n; ++i) {
-            minion_free(p[i]);
+        int n = size;
+        for (int i = 0; i < n; ++i) {
+            delete (&p[i]);
         }
     } else if (type == T_PairArray) {
         MinionValue* p = (MinionValue*) data;
-        msize n = size * 2;
-        for (msize i = 0; i < n; ++i) {
-            minion_free(p[i]);
+        int n = size * 2;
+        for (int i = 0; i < n; ++i) {
+            delete (&p[i]);
         }
     }
     // Free the memory pointed to directly by the data field. This will
     // collect the actual array storage from the above items or the
     // character storage for strings, etc.
     free(data);
-    // free() does nothing if the address it gets is NULL. But if
-    // non-pointer types should be used sometime with values in the
-    // data field, a further type/flag test would be needed to avoid
-    // trying to free these!
 }
 
 void free_macros(
@@ -311,7 +199,7 @@ void free_macros(
 {
     while (mp) {
         free(mp->name);
-        minion_free(mp->value);
+        delete (&mp->value);
         macro_node* mp0 = mp;
         mp = mp->next;
         free(mp0);
@@ -377,7 +265,7 @@ void Minion::remember(
 void Minion::release()
 {
     for (int i = 0; i < remembered_items_index; ++i) {
-        minion_free(remembered_items[i]);
+        delete (&remembered_items[i]);
     }
     remembered_items_index = 0;
 }
@@ -392,14 +280,16 @@ MinionValue::MinionValue()
 
 // Build a MinionValue from explicit field values.
 MinionValue::MinionValue(
-    short type,
-    short flags,
-    msize size,
-    void* data)
-    : type{type}, flags{flags}, size{size}, data{data} {}
+    short vtype,
+    short vflags,
+    int vsize,
+    void* vdata)
+    : type{vtype}, flags{vflags}, size{vsize}, data{vdata} {}
 
-// Build a new ("normal") minion string item from the given char*.
+// Build a new minion string item from the given char*.
 // The source bytes are copied, including the trailing 0.
+// The "simple" value allows a special flag to be set for undelimited
+// strings (relevant for macro names).
 MinionValue::MinionValue(const char* text, bool simple)
     : type{T_String}
     , flags{static_cast<short>(simple ? F_Simple_String : F_NoFlags)}
@@ -431,7 +321,7 @@ MinionValue Minion::new_array(std::initializer_list<MinionValue> items)
 // The source data of the value items (referenced by the data fields) is
 // not copied, thus the new map takes on ownership if the "not-owner" flags
 // of the data are clear.
-MinionValue Minion::new_map(std::initializer_list<minion_map_item> items)
+MinionValue Minion::new_map(std::initializer_list<map_item> items)
 {
     auto start_index = remembered_items_index;
     for (const auto& item : items) {
@@ -450,7 +340,6 @@ Minion::~Minion()
 {
     free(read_buffer);
     free(dump_buffer);
-    free(error_message);
     free(remembered_items);
     //TODO: macros should be freed on exit from read()
 }
@@ -497,14 +386,28 @@ MinionValue::MinionValue(MinionValue* items, int len, bool map)
 
 position Minion::here()
 {
-    return (position) {line_index + 1, (msize) (ch_pointer - ch_linestart)};
+    return {
+        line_index + 1,
+        static_cast<int>((ch_pointer - ch_linestart))};
 }
 
-char* Minion::pos(
+std::string Minion::pos(
     position p)
 {
-    snprintf(position_buffer, position_size, "%d.%d", p.line_n, p.byte_ix);
-    return position_buffer;
+    return std::to_string(p.line_n) + '.' + std::to_string(p.byte_ix);
+}
+
+// Represent number as a string with hexadecimal digits, at least minwidth. 
+std::string to_hex(long val, int minwidth)
+{
+    std::string s;
+    if (val >= 16 || minwidth > 1) {
+        s = to_hex(val/16, minwidth - 1);
+        val %= 16;
+    }
+    if (val < 10) s.push_back('0' + val);
+    else s.push_back('A' + val - 10);
+    return s;
 }
 
 char Minion::read_ch(
@@ -524,8 +427,8 @@ char Minion::read_ch(
             // separator
             return ch;
         }
-        error("Unexpected newline in delimited string, line %d", line_index);
-        exit(3); // unreachable
+        error(std::string("Unexpected newline in delimited string at line ")
+            .append(std::to_string(line_index)));
     } else if (ch == '\r' || ch == '\t') {
         // these are acceptable in the source, but not within strings.
         if (!instring) {
@@ -535,8 +438,10 @@ char Minion::read_ch(
     } else if ((unsigned char) ch >= 32 && ch != 127) {
         return ch;
     }
-    error("Illegal character (%2x) at position %s", (unsigned char) ch, pos(here()));
-    exit(3); // unreachable
+    error(std::string("Illegal character (byte) 0x")
+        .append(to_hex(ch, 2))
+        .append(" at position ")
+        .append(pos(here())));
 }
 
 void Minion::unread_ch()
@@ -618,8 +523,9 @@ minion_Type Minion::get_string()
         if (ch == '"')
             break;
         if (ch == 0) {
-            error("End of data reached inside delimited string from position %s", pos(start_pos));
-            exit(3); // unreachable
+            error(std::string(
+                "End of data reached inside delimited string from position ")
+                .append(pos(start_pos)));
         }
         if (ch == '\\') {
             ch = read_ch(false); // '\n' etc. are permitted here
@@ -646,13 +552,15 @@ minion_Type Minion::get_string()
             case 'u':
                 if (add_unicode_to_read_buffer(4))
                     continue;
-                error("Invalid unicode escape in string, position %s", pos(here()));
-                exit(3); // unreachable
+                    error(std::string(
+                        "Invalid unicode escape in string, position ")
+                        .append(pos(here())));
             case 'U':
                 if (add_unicode_to_read_buffer(6))
                     continue;
-                error("Invalid unicode escape in string, position %s", pos(here()));
-                exit(3); // unreachable
+                error(std::string(
+                    "Invalid unicode escape in string, position ")
+                    .append(pos(here())));
             case '[':
                 // embedded comment, read to "\]"
                 {
@@ -667,9 +575,9 @@ minion_Type Minion::get_string()
                             continue;
                         }
                         if (ch == 0) {
-                            error("End of data reached inside string comment from position %s",
-                                  pos(comment_pos));
-                            exit(3); // unreachable
+                            error(std::string(
+                                "End of data reached inside string comment from position ")
+                                .append(pos(comment_pos)));
                         }
                         // loop with next character
                         ch = read_ch(false);
@@ -677,8 +585,9 @@ minion_Type Minion::get_string()
                 }
                 continue; // comment ended, seek next character
             default:
-                error("Illegal string escape at position %s", pos(here()));
-                exit(3); // unreachable
+                error(std::string(
+                    "Illegal string escape at position ")
+                    .append(pos(here())));
             }
         }
         add_to_read_buffer(ch);
@@ -708,15 +617,18 @@ minion_Type Minion::get_list()
                 mtype = get_item();
                 continue;
             }
-            error("Reading list, expecting ',' or ']' at position %s", pos(current_pos));
-            exit(3); // unreachable
+            error(std::string(
+                "Reading list, expecting ',' or ']' at position ")
+                .append(pos(current_pos)));
         }
         if (mtype == F_Macro) {
-            error("Undefined macro name at position %s", pos(current_pos));
-            exit(3); // unreachable
+            error(std::string(
+                "Undefined macro name at position ")
+                .append(pos(current_pos)));
         } else {
-            error("Expecting list item or ']' at position %s", pos(current_pos));
-            exit(3); // unreachable
+            error(std::string(
+                "Expecting list item or ']' at position ")
+                .append(pos(current_pos)));
         }
     }
     remember(MinionValue(remembered_items,
@@ -752,7 +664,7 @@ minion_Type Minion::get_map()
     int start_index = remembered_items_index;
     position current_pos = here();
     short mtype = get_item();
-    char const* seeking;
+    std::string seeking;
     while (true) {
         // ',' before the closing bracket is allowed
         if (mtype == F_Token_MapEnd)
@@ -760,16 +672,19 @@ minion_Type Minion::get_map()
         // expect key
         if (mtype == T_String) {
             if (!is_key_unique(start_index)) {
-                error("Map key has already been defined: %s (at position %s)",
-                      last_item().data,
-                      pos(current_pos));
+                error(std::string(
+                    "Map key has already been defined: ")
+                    .append(static_cast<char*>(last_item().data))
+                    .append(" ... current position ")
+                    .append(pos(current_pos)));
             }
             current_pos = here();
             mtype = get_item();
             // expect ':'
             if (mtype != F_Token_Colon) {
-                error("Expecting ':' in Map item at position %s", pos(current_pos));
-                exit(3); // unreachable
+                error(std::string(
+                    "Expecting ':' in Map item at position ")
+                    .append(pos(current_pos)));
             }
             current_pos = here();
             mtype = get_item();
@@ -785,16 +700,16 @@ minion_Type Minion::get_map()
                     mtype = get_item();
                     continue;
                 }
-                error("Reading map, expecting ',' or '}' at position %s", pos(current_pos));
-                exit(3); // unreachable
+                error(std::string(
+                    "Reading map, expecting ',' or '}' at position ")
+                    .append(pos(current_pos)));
             } else if (mtype == F_Macro) {
                 seeking = "Expecting map value, undefined macro name at position %s";
             }
         } else {
             seeking = "Reading map, expecting a key at position %s";
         }
-        error(seeking, pos(current_pos));
-        exit(3); // unreachable
+        error(seeking.append(pos(current_pos)));
     }
     auto m = MinionValue(&remembered_items[start_index],
         remembered_items_index - start_index,
@@ -806,8 +721,8 @@ minion_Type Minion::get_map()
 
 /* Read the next "item" from the input.
  * Return the minion_Type of the item read, which may be a string, an
- * "array" (list) or an "object" (map). If the input is invalid, a
- * special "error" value will be returned, containing a message.
+ * "array" (list) or an "object" (map). If the input is invalid, a MinionError
+ * exception will be thrown, containing a message.
  * Also the structural symbols have types.
  * 
  * Strings are read into a buffer, which grows if it is too small.
@@ -833,10 +748,11 @@ short Minion::get_item()
                 if (ch == 0)
                     break;
                 if (ch == '{' || ch == '[' || ch == '\\' || ch == '"') {
-                    error("Unexpected character ('%c') at position %s",
-                          (unsigned char) ch,
-                          pos(here()));
-                    exit(3); // unreachable
+                    auto s = std::string(
+                        "Unexpected character ('");
+                    s.push_back(ch);
+                    error(s.append("' at position ")
+                        .append(pos(here())));
                 }
                 add_to_read_buffer(ch);
                 ch = read_ch(false);
@@ -850,7 +766,7 @@ short Minion::get_item()
                     // Push to remember stack, marking it as not the owner of
                     // its data
                     remember(
-                        (MinionValue) {mm->type, (short)(mm->flags + F_MACRO_VALUE), mm->size, mm->data});
+                        (MinionValue) {mm->type, (short)(mm->flags + F_NOT_OWNER), mm->size, mm->data});
                     result = mm->type;
                     break;
                 }
@@ -894,8 +810,9 @@ short Minion::get_item()
                         continue;
                     }
                     if (ch == 0) {
-                        error("Unterminated comment ('\\[ ...') at position %s", pos(comment_pos));
-                        exit(3); // unreachable
+                        error(std::string(
+                            "Unterminated comment ('\\[ ...') at position ")
+                            .append(pos(comment_pos)));
                     }
                     // Comment loop ... read next character
                     ch = read_ch(false);
@@ -973,7 +890,7 @@ MinionValue Minion::read(
         // Prepare error message
         return MinionValue(
             T_NoType, 
-            F_Error | F_MACRO_VALUE, // not owner of the string 
+            F_Error | F_NOT_OWNER, // not owner of the string 
             strlen(error_message), 
             error_message);
     }
@@ -982,10 +899,10 @@ MinionValue Minion::read(
         position current_position = here();
         short mtype = get_item();
         if (mtype != F_Macro) {
-            if (last_item().flags & F_MACRO_VALUE) {
-                error("Position %s: macro value at top level ... redefining?",
-                      pos(current_position));
-                exit(3); // unreachable
+            if (last_item().flags & F_NOT_OWNER) {
+                error(std::string("Position ")
+                    .append(pos(current_position))
+                    .append(": macro value at top level ... redefining?"));
             } else if (real_minion_value(mtype)) {
                 // found document item
                 break;
@@ -993,10 +910,10 @@ MinionValue Minion::read(
             // Invalid item
             if (mtype == F_Token_End) {
                 error("Document contains no main item");
-                exit(3); // unreachable
             }
-            error("Invalid minion item at position %s", pos(current_position));
-            exit(3); // unreachable
+            error(std::string(
+                "Invalid minion item at position ")
+                .append(pos(current_position)));
         }
         // *** macro name: read the definition ***
         // Check for duplicate
@@ -1004,8 +921,9 @@ MinionValue Minion::read(
         // expect ':'
         mtype = get_item();
         if (mtype != F_Token_Colon) {
-            error("Expecting ':' in macro definition at position %s", pos(current_position));
-            exit(3); // unreachable
+            error(std::string(
+                "Expecting ':' in macro definition at position ")
+                .append(pos(current_position)));
         }
         current_position = here();
         mtype = get_item();
@@ -1026,11 +944,13 @@ MinionValue Minion::read(
                 macros = a;
                 continue;
             }
-            error("After macro definition: expecting ',' at position %s", pos(current_position));
-            exit(3); // unreachable
+            error(std::string(
+                "After macro definition: expecting ',' at position ")
+                .append(pos(current_position)));
         }
-        error("In macro definition, expecting a value at position %s", pos(current_position));
-        exit(3); // unreachable
+        error(std::string(
+            "In macro definition, expecting a value at position ")
+            .append(pos(current_position)));
     }
     // "Real" minion item, not macro definition => document content
     MinionValue m = *remembered_items;
@@ -1042,8 +962,10 @@ MinionValue Minion::read(
     position current_position = here();
     if (get_item() != F_Token_End) {
         minion_free(doc);
-        error("Position %s: unexpected item after document item", pos(current_position));
-        exit(3); // unreachable
+        error(std::string(
+            "Position ")
+            .append(pos(current_position))
+            .append(": unexpected item after document item"));
     }
 
     return doc;
@@ -1154,7 +1076,7 @@ bool Minion::dump_list(
         new_depth = depth + 1;
     pad = new_depth * indent;
     dump_ch('[');
-    for (msize i = 0; i < source.size; ++i) {
+    for (int i = 0; i < source.size; ++i) {
         dump_pad(pad);
         if (!dump_value(((MinionValue*) source.data)[i], new_depth))
             return false;
@@ -1169,14 +1091,14 @@ bool Minion::dump_list(
 bool Minion::dump_map(
     MinionValue source, int depth)
 {
-    msize len = source.size * 2;
+    int len = source.size * 2;
     int pad = -1;
     int new_depth = -1;
     if (depth >= 0)
         new_depth = depth + 1;
     pad = new_depth * indent;
     dump_ch('{');
-    for (msize i = 0; i < len; ++i) {
+    for (int i = 0; i < len; ++i) {
         dump_pad(pad);
         auto key = source.data[i];
         if (key.type != T_String)
@@ -1233,6 +1155,8 @@ MinionValue Minion::pop_remembered()
 {
     return remembered_items[--remembered_items_index];
 }
+
+} // End of namespace minion
 
 /* Use of initializer_list:
 struct pa{char* k; int v;};

@@ -1,5 +1,6 @@
 build
 tmp
 _*
+CMakeLists.txt.user
 
-.vscode/settings.json
+.vscode/

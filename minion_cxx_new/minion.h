@@ -137,6 +137,7 @@ class Minion
     void unread_ch();
     position here();
     std::string pos(position p);
+    bool add_unicode_to_read_buffer(int len);
 
 public:
     MinionValue read(std::string_view input);
@@ -147,7 +148,6 @@ public:
     void undump_ch();
     MinionValue* find_macro(char* name);
     void remember(MinionValue minion_item);
-    bool add_unicode_to_read_buffer(int len);
     MinionValue last_item();
     bool is_key_unique(int i_start);
     void dump_string(const char* source);

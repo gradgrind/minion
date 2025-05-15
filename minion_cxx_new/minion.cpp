@@ -420,6 +420,75 @@ int Minion::get_list()
     return T_Array;
 }
 
+int Minion::get_map()
+{
+    int start_index = remembered_items.size();
+    position current_pos = here();
+    short mtype = get_item();
+    std::string seeking;
+    while (true) {
+        // ',' before the closing bracket is allowed
+        if (mtype == F_Token_MapEnd)
+            break;
+        // expect key
+        if (mtype == T_String) {
+            // Check uniqueness of key (end before this key!)
+            int end = remembered_items.size() - 1;
+            for (int i = start_index; i < end; i += 2) {
+                auto si = remembered_items[i].data_index;
+                if (*data[si].s == read_buffer) {
+                    error(std::string("Map key has already been defined: ")
+                              .append(read_buffer)
+                              .append(" ... current position ")
+                              .append(pos(current_pos)));
+                }
+            }
+            current_pos = here();
+            mtype = get_item();
+            // expect ':'
+            if (mtype != F_Token_Colon) {
+                error(
+                    std::string("Expecting ':' in Map item at position ").append(pos(current_pos)));
+            }
+            current_pos = here();
+            mtype = get_item();
+            // expect value
+            seeking = "Reading map, expecting a value at position %s";
+            if (real_minion_value(mtype)) {
+                current_pos = here();
+                mtype = get_item();
+                if (mtype == F_Token_MapEnd) {
+                    break;
+                } else if (mtype == F_Token_Comma) {
+                    current_pos = here();
+                    mtype = get_item();
+                    continue;
+                }
+                error(std::string("Reading map, expecting ',' or '}' at position ")
+                          .append(pos(current_pos)));
+            } else if (mtype == F_Macro) {
+                seeking = "Expecting map value, undefined macro name at position %s";
+            }
+        } else {
+            seeking = "Reading map, expecting a key at position %s";
+        }
+        error(seeking.append(pos(current_pos)));
+    }
+    auto m = new std::vector<map_pair>;
+    int end = remembered_items.size();
+    m->reserve((end - start_index) / 2);
+    for (int i = start_index; i < end; ++i) {
+        auto si = remembered_items[i].data_index;
+        m->push_back({data[si].s, remembered_items[++i]});
+    }
+    int i = data.size();
+    data.push_back({.m = m});
+    remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
+    //??? remembered_items.resize(start_index);
+    remembered_items.push_back({T_PairArray, F_NoFlags, i});
+    return T_PairArray;
+}
+
 //////////////
 
 void Minion::dump_ch(
@@ -757,66 +826,6 @@ bool Minion::is_key_unique(
         i += 2;
     }
     return true;
-}
-
-int Minion::get_map()
-{
-    int start_index = remembered_items_index;
-    position current_pos = here();
-    short mtype = get_item();
-    std::string seeking;
-    while (true) {
-        // ',' before the closing bracket is allowed
-        if (mtype == F_Token_MapEnd)
-            break;
-        // expect key
-        if (mtype == T_String) {
-            if (!is_key_unique(start_index)) {
-                error(std::string(
-                    "Map key has already been defined: ")
-                    .append(static_cast<char*>(last_item().data))
-                    .append(" ... current position ")
-                    .append(pos(current_pos)));
-            }
-            current_pos = here();
-            mtype = get_item();
-            // expect ':'
-            if (mtype != F_Token_Colon) {
-                error(std::string(
-                    "Expecting ':' in Map item at position ")
-                    .append(pos(current_pos)));
-            }
-            current_pos = here();
-            mtype = get_item();
-            // expect value
-            seeking = "Reading map, expecting a value at position %s";
-            if (real_minion_value(mtype)) {
-                current_pos = here();
-                mtype = get_item();
-                if (mtype == F_Token_MapEnd) {
-                    break;
-                } else if (mtype == F_Token_Comma) {
-                    current_pos = here();
-                    mtype = get_item();
-                    continue;
-                }
-                error(std::string(
-                    "Reading map, expecting ',' or '}' at position ")
-                    .append(pos(current_pos)));
-            } else if (mtype == F_Macro) {
-                seeking = "Expecting map value, undefined macro name at position %s";
-            }
-        } else {
-            seeking = "Reading map, expecting a key at position %s";
-        }
-        error(seeking.append(pos(current_pos)));
-    }
-    auto m = MinionValue(&remembered_items[start_index],
-        remembered_items_index - start_index,
-        true);
-    remembered_items_index = start_index;
-    remember(m);
-    return T_PairArray;
 }
 
 MinionValue Minion::read(

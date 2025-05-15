@@ -2,7 +2,9 @@
 #define MINION_H
 
 #include <initializer_list>
+#include <map>
 #include <stdexcept>
+#include <vector>
 
 //TODO: Adapt to new Minion class ...
 
@@ -19,6 +21,7 @@ public:
         : runtime_error(message) {}
 };
 
+/*
 class MinionValue
 {
     friend class Minion; // TODO?
@@ -50,6 +53,7 @@ struct map_item {
 //TODO?
 //    minion_map_item(char* k, MinionValue v) : key{k}, value{v} {}
 };
+*/
 
 // Used for recording read-position in input text
 struct position
@@ -58,75 +62,94 @@ struct position
     int byte_ix;
 };
 
-// Node for building the macro map as a linked list
-struct macro_node
+// MinionValue is a fairly opaque class. Its actual data is managed by
+// a Minion instance, and is accessible using methods of that instance.
+class MinionValue
 {
-    char* name;
-    struct macro_node* next;
+    friend class Minion; // TODO?
+
+    short type;
+    short flags;
+    int data_index;
+
+    // null value constructor
+    MinionValue();
+    // constructor for explicit initialization
+    MinionValue(short type, short flags, int data);
+
+public:
+    bool is_string();
+    bool is_list();
+    bool is_map();
+
+    //TODO?
+    bool is_error();
+};
+
+struct map_pair
+{
+    std::string* key;
     MinionValue value;
+};
+
+union minion_data {
+    std::string* s;
+    std::vector<MinionValue>* l;
+    std::vector<map_pair>* m;
 };
 
 class Minion
 {
-    // For character-by-character reading. These point to memory which is
-    // not controlled by Minion, so they do not need freeing.
-    const char* ch_pointer0;
-    const char* ch_pointer;
-    const char* ch_linestart = 0;
+    // All memory allocations for the MinionValue items are stacked here:
+    std::vector<minion_data> data;
+
+    //TODO: Move to string& or string_view?
+    // For character-by-character reading. The referenced memory is
+    // not controlled by Minion.
+    std::string_view input_string;
+    int ch_index;
+    int ch_linestart;
     int line_index;
 
-    // read_buffer is used for constructinging strings before they are
-    // passed to minion_value items.
-    char* read_buffer = 0;
-    size_t read_buffer_size = 0;
-    size_t read_buffer_index = 0;
+    // read_buffer is used for constructinging strings when parsing text
+    // input, before they are placed on the data stack.
+    std::string read_buffer;
 
     // dump_buffer is used for serializing a minion_value.
-    char* dump_buffer = 0;
-    int dump_buffer_size = 0;
-    int dump_buffer_index = 0;
+    std::string dump_buffer;
     int indent = 2; // pretty-print indentation
-
-    /* TODO-- Error handling ... use exceptions
-    jmp_buf recover; // for error recovery
-
-    // error_message is a buffer used in reporting errors. The error message
-    // is stored here before being passed to a special minion_value (type
-    // T_Error).
-    char* error_message = 0;
-    int error_message_size = 0;
-    */
-
-    //TODO-- char position_buffer[position_size];
 
     // Keep track of "unbound" minion items
     // The buffer for these items is used as a stack.
-    MinionValue* remembered_items = 0;
-    int remembered_items_size = 0;
-    int remembered_items_index = 0;
+    std::vector<MinionValue> remembered_items;
 
     // Manage the macros
-    macro_node* macros = NULL;
+    std::map<std::string, MinionValue> macros;
 
-    void reset_read_buffer_index();
-    void add_to_read_buffer(char ch);
+    void error(std::string_view msg);
+
+    int get_item();
+    int get_string();
+    int get_list();
+    int get_map();
+
+    char read_ch(bool instring);
+    void unread_ch();
+    position here();
+    std::string pos(position p);
+
+public:
+    MinionValue read(std::string_view input);
+
+    /*?
     void clear_dump_buffer();
     void dump_ch(char ch);
     void undump_ch();
-    void error(std::string_view msg);
     MinionValue* find_macro(char* name);
     void remember(MinionValue minion_item);
-    position here();
-    std::string pos(position p);
-    char read_ch(bool instring);
-    void unread_ch();
     bool add_unicode_to_read_buffer(int len);
-    int get_string();
-    int get_list();
     MinionValue last_item();
     bool is_key_unique(int i_start);
-    int get_map();
-    int get_item();
     void dump_string(const char* source);
     void dump_pad(int n);
     bool dump_list(MinionValue source, int depth);
@@ -151,7 +174,7 @@ public:
     //TODO?
     void tidy_dump();
     void release();
-
+    */
 };
 
 } // End namespace minion

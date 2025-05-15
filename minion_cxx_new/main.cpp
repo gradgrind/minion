@@ -6,8 +6,47 @@
 
 using namespace minion;
 
+struct Value
+{
+    short type;
+    short flags;
+    int size;
+    union {
+        char* s;
+        Value* l;
+        int* m;
+    };
+
+    /*
+    Value()
+        : type{0}
+        , flags{0}
+        , size{0}
+        , s{nullptr}
+    {}
+    */
+};
+
 int main()
 {
+    Value v;
+    printf("?? %d %d %d %lu\n", v.type, v.flags, v.size, v.m);
+    printf("$ %lu\n", sizeof(v));
+
+    auto v1 = v;
+    v1.type = 1;
+    auto v2{v};
+    v2.flags = 2;
+    Value v3(v);
+    v3.size = 3;
+    Value v4{4, 4, 4, {nullptr}};
+    printf("?? %d %d %d %lu\n", v1.type, v1.flags, v1.size, v1.m);
+    printf("?? %d %d %d %lu\n", v2.type, v2.flags, v2.size, v2.m);
+    printf("?? %d %d %d %lu\n", v3.type, v3.flags, v3.size, v3.m);
+    printf("?? %d %d %d %lu\n", v4.type, v4.flags, v4.size, v4.m);
+
+    exit(0);
+
     const char* fp = "../data/test4.minion";
     const char* f = read_file(fp);
     if (!f) {

@@ -45,6 +45,16 @@ int main()
     printf("?? %d %d %d %lu\n", v3.type, v3.flags, v3.size, v3.m);
     printf("?? %d %d %d %lu\n", v4.type, v4.flags, v4.size, v4.m);
 
+    MinionValue m0;
+    printf("m0: %zu\n", m0.index());
+    std::string A{"A"};
+    std::string B{"B"};
+    auto m1 = MinionValue{A};
+    auto m2 = MinionValue{B};
+    auto ml = MinionValue{MinionList({&m1, &m2})};
+    printf("AB: %lu %lu\n", sizeof(m1), sizeof(ml));
+    auto mlx = std::get_if<MinionList>(&ml)->at(0);
+    printf("A: %s\n", std::get_if<std::string>(mlx)->c_str());
     exit(0);
 
     const char* fp = "../data/test4.minion";
@@ -74,11 +84,12 @@ int main()
     try {
         parsed = miniondata.read(f);
 
-        char* result = miniondata.dump(parsed, 0);
+        /*TODO++ char* result = miniondata.dump(parsed, 0);
         if (result)
             printf("\n -->\n%s\n", result);
         else
             printf("*** Dump failed\n");
+        */
     } catch (MinionError &e) {
         printf("ERROR: %s\n", e.what());
     }

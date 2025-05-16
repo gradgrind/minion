@@ -4,6 +4,7 @@
 #include <initializer_list>
 #include <map>
 #include <stdexcept>
+#include <variant>
 #include <vector>
 
 //TODO: Adapt to new Minion class ...
@@ -62,9 +63,27 @@ struct position
     int byte_ix;
 };
 
+class MinionList;
+class MinionMap;
+using MinionValue = std::variant<std::monostate, std::string, MinionList, MinionMap>;
+
+struct map_pair
+{
+    std::string* key;
+    MinionValue* value;
+};
+
+class MinionList : public std::vector<MinionValue*>
+{};
+
+class MinionMap : public std::vector<map_pair>
+{};
+
+/*
 // MinionValue is a fairly opaque class. Its actual data is managed by
 // a Minion instance, and is accessible using methods of that instance.
 class MinionValue
+    : std::variant<std::monostate, std::string, std::vector<MinionValue*>, std::vector<map_pair>>
 {
     friend class Minion; // TODO?
 
@@ -86,26 +105,24 @@ public:
     bool is_error();
 };
 
-struct map_pair
-{
-    std::string* key;
-    MinionValue value;
-};
-
 union minion_data {
     std::string* s;
     std::vector<MinionValue>* l;
     std::vector<map_pair>* m;
 };
+*/
 
 class Minion
 {
-    // All memory allocations for the MinionValue items are stacked here:
-    std::vector<minion_data> data;
+    // The addresses of all heap-allocated MinionValue items are stacked
+    // here as the "owning" pointers, so that deletion can be centrally
+    // managed. All MinionValue pointers in the data structures are then
+    // "weak" pointers, whose validity depends on the management of this
+    // stack.
+    std::vector<MinionValue*> data;
 
-    //TODO: Move to string& or string_view?
-    // For character-by-character reading. The referenced memory is
-    // not controlled by Minion.
+    // For character-by-character reading of MINION input.
+    // The referenced memory is not controlled by Minion.
     std::string_view input_string;
     int ch_index;
     int ch_linestart;
@@ -119,12 +136,11 @@ class Minion
     std::string dump_buffer;
     int indent = 2; // pretty-print indentation
 
-    // Keep track of "unbound" minion items
-    // The buffer for these items is used as a stack.
-    std::vector<MinionValue> remembered_items;
+    // A stack-like buffer for building MinionValue items.
+    std::vector<MinionValue*> remembered_items;
 
     // Manage the macros
-    std::map<std::string, MinionValue> macros;
+    std::map<std::string_view, MinionValue*> macros;
 
     void error(std::string_view msg);
 

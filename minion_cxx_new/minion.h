@@ -69,7 +69,7 @@ using MinionValue = std::variant<std::monostate, std::string, MinionList, Minion
 
 struct map_pair
 {
-    std::string* key;
+    std::string* key; //TODO: string_view?
     MinionValue* value;
 };
 

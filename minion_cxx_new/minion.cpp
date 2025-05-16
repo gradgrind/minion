@@ -362,17 +362,17 @@ int Minion::get_list()
             error(std::string("Expecting list item or ']' at position ").append(pos(current_pos)));
         }
     }
-    auto m = new std::vector<MinionValue>;
     int end = remembered_items.size();
-    m->reserve(end - start_index);
+    auto m = new MinionValue{MinionList()};
+    auto ml = std::get_if<MinionList>(m);
+    ml->reserve(end - start_index);
     for (int i = start_index; i < end; ++i) {
-        m->push_back(remembered_items[i]);
+        ml->push_back(remembered_items[i]);
     }
-    int i = data.size();
-    data.push_back({.l = m});
-    remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
-    //??? remembered_items.resize(start_index);
-    remembered_items.push_back({T_Array, T_NoFlags, i});
+    data.push_back(m);
+    //remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
+    remembered_items.resize(start_index);
+    remembered_items.push_back(m);
     return T_Array;
 }
 
@@ -391,8 +391,8 @@ int Minion::get_map()
             // Check uniqueness of key (end before this key!)
             int end = remembered_items.size() - 1;
             for (int i = start_index; i < end; i += 2) {
-                auto si = remembered_items[i].data_index;
-                if (*data[si].s == read_buffer) {
+                auto si = std::get_if<std::string>(remembered_items[i]);
+                if (*si == read_buffer) {
                     error(std::string("Map key has already been defined: ")
                               .append(read_buffer)
                               .append(" ... current position ")
@@ -410,7 +410,7 @@ int Minion::get_map()
             mtype = get_item();
             // expect value
             seeking = "Reading map, expecting a value at position %s";
-            if (real_minion_value(mtype)) {
+            if (mtype < T_Real_End) { // TODO: Is 0 possible?
                 current_pos = here();
                 mtype = get_item();
                 if (mtype == T_Token_MapEnd) {
@@ -430,23 +430,23 @@ int Minion::get_map()
         }
         error(seeking.append(pos(current_pos)));
     }
-    auto m = new std::vector<map_pair>;
     int end = remembered_items.size();
-    m->reserve((end - start_index) / 2);
+    auto m = new MinionValue{MinionMap()};
+    auto ml = std::get_if<MinionMap>(m);
+    ml->reserve((end - start_index) / 2);
     for (int i = start_index; i < end; ++i) {
-        auto si = remembered_items[i].data_index;
-        m->push_back({data[si].s, remembered_items[++i]});
+        auto mk = std::get_if<std::string>(remembered_items[i]);
+        ml->push_back({mk, remembered_items[++i]});
     }
-    int i = data.size();
-    data.push_back({.m = m});
-    remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
-    //??? remembered_items.resize(start_index);
-    remembered_items.push_back({T_PairArray, T_NoFlags, i});
+    data.push_back(m);
+    //remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
+    remembered_items.resize(start_index);
+    remembered_items.push_back(m);
     return T_PairArray;
 }
 
 //////////////
-
+/*
 void Minion::dump_ch(
     char ch)
 {
@@ -539,6 +539,7 @@ MinionValue* Minion::find_macro(
     }
     return nullptr;
 }
+*/
 
 /* Some allocated memory can be retained between minion_read calls,
  * but it should probably be freed sometime, if it is really no
@@ -684,6 +685,7 @@ MinionValue::MinionValue(MinionValue* items, int len, bool map)
     }
     data = a;
 }
+*/
 
 position Minion::here()
 {

@@ -1,8 +1,8 @@
 #include "iofile.h"
 #include "minion.h"
 #include <cstdio>
-#include <time.h>
 #include <cstdlib>
+#include <time.h>
 
 using namespace minion;
 
@@ -27,8 +27,29 @@ struct Value
     */
 };
 
+struct S
+{
+    std::string name;
+    int one;
+    int two;
+
+    ~S() { printf("-- deleting %d\n", one); }
+};
+
 int main()
 {
+    /*
+    std::vector<std::unique_ptr<S>> vec;
+    for (int i = 0; i < 4; ++i) {
+        vec.emplace_back(std::make_unique<S>("A", i, i * 5));
+        //vec.emplace_back(new S{"A", i, i * 5});
+    }
+    S* w = vec.at(1).get();
+    printf("vec[1]: %d %d\n", w->one, w->two);
+    vec.resize(2);
+    printf("Exiting %zu\n", vec.capacity());
+    exit(0);
+
     Value v;
     printf("?? %d %d %d %lu\n", v.type, v.flags, v.size, v.m);
     printf("$ %lu\n", sizeof(v));
@@ -56,6 +77,7 @@ int main()
     auto mlx = std::get_if<MinionList>(&ml)->at(0);
     printf("A: %s\n", std::get_if<std::string>(mlx)->c_str());
     exit(0);
+    */
 
     const char* fp = "../data/test4.minion";
     const char* f = read_file(fp);
@@ -67,7 +89,7 @@ int main()
     struct timespec start, end;
 
     Minion miniondata;
-    MinionValue parsed;
+    MinionValue* parsed;
 
     for (int count = 0; count < 10; ++count) {
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
@@ -78,7 +100,6 @@ int main()
         double elapsed = end.tv_sec - start.tv_sec;
         elapsed += (end.tv_nsec - start.tv_nsec) / 1000.0;
         printf("%0.2f microseconds elapsed\n", elapsed);
-        delete (&parsed);
     }
 
     try {

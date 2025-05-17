@@ -113,8 +113,8 @@ int Minion::get_item()
                 break;
             }
             // A string without delimiters, push to data and remember stacks
-            auto m = new MinionValue{read_buffer};
-            data.push_back(m);
+            auto m = new MinionValue(read_buffer);
+            data.emplace_back(std::unique_ptr<MinionValue>(m));
             remembered_items.push_back(m);
             result = T_String;
             break;
@@ -286,8 +286,8 @@ void Minion::get_string()
         }
         read_buffer.push_back(ch);
     }
-    auto m = new MinionValue{read_buffer};
-    data.push_back(m);
+    auto m = new MinionValue(read_buffer);
+    data.emplace_back(std::unique_ptr<MinionValue>(m));
     remembered_items.push_back(m);
 }
 
@@ -376,7 +376,7 @@ void Minion::get_list()
     for (int i = start_index; i < end; ++i) {
         ml->push_back(remembered_items[i]);
     }
-    data.push_back(m);
+    data.emplace_back(std::unique_ptr<MinionValue>(m));
     //remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
     remembered_items.resize(start_index);
     remembered_items.push_back(m);
@@ -450,7 +450,7 @@ void Minion::get_map()
         auto mk = std::get_if<std::string>(remembered_items[i]);
         ml->push_back({mk, remembered_items[++i]});
     }
-    data.push_back(m);
+    data.emplace_back(std::unique_ptr<MinionValue>(m));
     //remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
     remembered_items.resize(start_index);
     remembered_items.push_back(m);
@@ -474,17 +474,7 @@ void Minion::error(
         recent = ch_index - ch_start;
     }
     auto mx = std::string{msg}.append("\n ... ").append(&input_string[ch_start], recent);
-    free_data();
     throw MinionError(mx);
-}
-
-// Free the MinionValues in the data vector.
-void Minion::free_data()
-{
-    for (const auto& p : data) {
-        delete p;
-    }
-    data.clear();
 }
 
 //////////////
@@ -699,7 +689,7 @@ void Minion::unread_ch()
 MinionValue* Minion::read(
     std::string_view input)
 {
-    free_data();
+    data.clear();
     macros.clear();
     remembered_items.clear();
 
@@ -719,8 +709,7 @@ MinionValue* Minion::read(
                           .append(": macro name already defined"));
             }
             auto mkey = new MinionValue{read_buffer};
-            data.push_back(mkey);
-
+            data.emplace_back(std::unique_ptr<MinionValue>(mkey));
             current_pos = here();
             // expect ':'
             mtype = get_item();
@@ -774,6 +763,7 @@ MinionValue* Minion::read(
     return m;
 }
 
+/*
 void Minion::dump_string(
     const char* source)
 {
@@ -939,6 +929,7 @@ char* Minion::dump(
     }
     return 0;
 }
+*/
 
 } // End of namespace minion
 

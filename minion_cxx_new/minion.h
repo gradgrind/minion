@@ -3,6 +3,7 @@
 
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <variant>
 #include <vector>
@@ -52,7 +53,7 @@ class Minion
     // managed (see free_data()). All MinionValue pointers in the data
     // structures are then "weak" pointers, whose validity depends on the
     // management of this stack.
-    std::vector<MinionValue*> data;
+    std::vector<std::unique_ptr<MinionValue>> data;
 
     // For character-by-character reading of MINION input.
     // The referenced memory is not controlled by Minion.
@@ -90,7 +91,6 @@ class Minion
 
 public:
     MinionValue* read(std::string_view input);
-    void free_data();
 
     /*?
     void clear_dump_buffer();

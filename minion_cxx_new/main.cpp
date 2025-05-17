@@ -105,13 +105,14 @@ int main()
     try {
         parsed = miniondata.read(f);
 
-        /*TODO++ char* result = miniondata.dump(parsed, 0);
+        //TODO++
+        const char* result = miniondata.dump(parsed, 2);
         if (result)
             printf("\n -->\n%s\n", result);
         else
             printf("*** Dump failed\n");
-        */
-    } catch (MinionError &e) {
+
+    } catch (MinionError& e) {
         printf("ERROR: %s\n", e.what());
     }
     return 0;

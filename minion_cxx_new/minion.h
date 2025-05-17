@@ -89,24 +89,17 @@ class Minion
     std::string pos(position p);
     bool add_unicode_to_read_buffer(int len);
 
+    void dump_string(const std::string_view source);
+    void dump_pad(int n);
+    bool dump_list(const MinionList* source, int depth);
+    bool dump_map(const MinionMap* source, int depth);
+    bool dump_value(const MinionValue* source, int depth);
+
 public:
     MinionValue* read(std::string_view input);
+    const char* dump(MinionValue* source, int pretty);
 
     /*?
-    void clear_dump_buffer();
-    void dump_ch(char ch);
-    void undump_ch();
-    MinionValue* find_macro(char* name);
-    void remember(MinionValue minion_item);
-    bool is_key_unique(int i_start);
-    void dump_string(const char* source);
-    void dump_pad(int n);
-    bool dump_list(MinionValue source, int depth);
-    bool dump_map(MinionValue source, int depth);
-    bool dump_value(MinionValue source, int depth);
-    MinionValue pop_remembered();
-
-public:
 
     ~Minion();
 

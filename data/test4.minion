@@ -120,6 +120,8 @@
 ],
 
 {
+EMPTY:     [   [], {}, ""   ],
+
 LEVEL_MAP: {
     Gym: Gymnasium,
     RS: Realschule,

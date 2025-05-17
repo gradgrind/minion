@@ -252,11 +252,13 @@ void Minion::get_string()
                     continue;
                 error(
                     std::string("Invalid unicode escape in string, position ").append(pos(here())));
+                break; // unreachable
             case 'U':
                 if (add_unicode_to_read_buffer(6))
                     continue;
                 error(
                     std::string("Invalid unicode escape in string, position ").append(pos(here())));
+                break; // unreachable
             case '[':
                 // embedded comment, read to "\]"
                 {
@@ -477,31 +479,7 @@ void Minion::error(
     throw MinionError(mx);
 }
 
-//////////////
-/*
-void Minion::dump_ch(
-    char ch)
-{
-    if (dump_buffer_index == dump_buffer_size) {
-        // Increase the size of the buffer
-        void* tmp = malloc(dump_buffer_size + dump_buffer_size_increment);
-        if (!tmp)
-            exit(1);
-        memcpy(tmp, dump_buffer, dump_buffer_size);
-        free(dump_buffer);
-        dump_buffer = (char*) tmp;
-        dump_buffer_size += dump_buffer_size_increment;
-    }
-    dump_buffer[dump_buffer_index++] = ch;
-}
-
-// Remove last added character – useful for trailing commas.
-void Minion::undump_ch()
-{
-    dump_buffer_index--;
-}
-
-*/
+// *** Serializing MINION ***
 
 /* Some allocated memory can be retained between minion_read calls,
  * but it should probably be freed sometime, if it is really no
@@ -755,7 +733,6 @@ MinionValue* Minion::read(
     // Check that there are no further items
     position current_position = here();
     if (get_item() != T_Token_End) {
-        delete (&m); //TODO: Is this a double delete?
         error(std::string("Position ")
                   .append(pos(current_position))
                   .append(": unexpected item after document item"));
@@ -763,173 +740,165 @@ MinionValue* Minion::read(
     return m;
 }
 
-/*
 void Minion::dump_string(
-    const char* source)
+    const std::string_view source)
 {
-    dump_ch('"');
-    int i = 0;
-    unsigned char ch;
-    while (true) {
-        ch = source[i++];
+    dump_buffer.push_back('"');
+    for (unsigned char ch : source) {
         switch (ch) {
         case '"':
-            dump_ch('\\');
-            dump_ch('"');
+            dump_buffer.push_back('\\');
+            dump_buffer.push_back('"');
             break;
         case '\n':
-            dump_ch('\\');
-            dump_ch('n');
+            dump_buffer.push_back('\\');
+            dump_buffer.push_back('n');
             break;
         case '\t':
-            dump_ch('\\');
-            dump_ch('t');
+            dump_buffer.push_back('\\');
+            dump_buffer.push_back('t');
             break;
         case '\b':
-            dump_ch('\\');
-            dump_ch('b');
+            dump_buffer.push_back('\\');
+            dump_buffer.push_back('b');
             break;
         case '\f':
-            dump_ch('\\');
-            dump_ch('f');
+            dump_buffer.push_back('\\');
+            dump_buffer.push_back('f');
             break;
         case '\r':
-            dump_ch('\\');
-            dump_ch('r');
+            dump_buffer.push_back('\\');
+            dump_buffer.push_back('r');
             break;
         case '\\':
-            dump_ch('\\');
-            dump_ch('\\');
+            dump_buffer.push_back('\\');
+            dump_buffer.push_back('\\');
             break;
         case 127:
-            dump_ch('\\');
-            dump_ch('u');
-            dump_ch('0');
-            dump_ch('0');
-            dump_ch('7');
-            dump_ch('F');
+            dump_buffer.push_back('\\');
+            dump_buffer.push_back('u');
+            dump_buffer.push_back('0');
+            dump_buffer.push_back('0');
+            dump_buffer.push_back('7');
+            dump_buffer.push_back('F');
             break;
         default:
             if (ch >= 32) {
-                dump_ch(ch);
-            } else if (ch == 0) {
-                // The string is 0-terminated, so \u0000 is not
-                // possible as a character.
-                dump_ch('"');
-                return;
+                dump_buffer.push_back(ch);
             } else {
-                dump_ch('\\');
-                dump_ch('u');
-                dump_ch('0');
-                dump_ch('0');
+                dump_buffer.push_back('\\');
+                dump_buffer.push_back('u');
+                dump_buffer.push_back('0');
+                dump_buffer.push_back('0');
                 if (ch >= 16) {
-                    dump_ch('1');
+                    dump_buffer.push_back('1');
                     ch -= 16;
                 } else
-                    dump_ch('0');
+                    dump_buffer.push_back('0');
                 if (ch >= 10)
-                    dump_ch('A' + ch - 10);
+                    dump_buffer.push_back('A' + ch - 10);
                 else
-                    dump_ch('0' + ch);
+                    dump_buffer.push_back('0' + ch);
             }
         }
     }
+    dump_buffer.push_back('"');
 }
 
 void Minion::dump_pad(
     int n)
 {
     if (n >= 0) {
-        dump_ch('\n');
+        dump_buffer.push_back('\n');
         while (n > 0) {
-            dump_ch(' ');
+            dump_buffer.push_back(' ');
             --n;
         }
     }
 }
 
 bool Minion::dump_list(
-    MinionValue source, int depth)
+    const MinionList* source, int depth)
 {
-    int pad = -1;
-    int new_depth = -1;
-    if (depth >= 0)
-        new_depth = depth + 1;
-    pad = new_depth * indent;
-    dump_ch('[');
-    for (int i = 0; i < source.size; ++i) {
-        dump_pad(pad);
-        if (!dump_value(((MinionValue*) source.data)[i], new_depth))
-            return false;
-        dump_ch(',');
+    dump_buffer.push_back('[');
+    int len = source->size();
+    if (len != 0) {
+        int pad = -1;
+        int new_depth = -1;
+        if (depth >= 0)
+            new_depth = depth + 1;
+        pad = new_depth * indent;
+        for (int i = 0; i < len; ++i) {
+            dump_pad(pad);
+            if (!dump_value(source->at(i), new_depth))
+                return false;
+            dump_buffer.push_back(',');
+        }
+        dump_buffer.pop_back();
+        dump_pad(depth * indent);
     }
-    undump_ch();
-    dump_pad(depth * indent);
-    dump_ch(']');
+    dump_buffer.push_back(']');
     return true;
 }
 
 bool Minion::dump_map(
-    MinionValue source, int depth)
+    const MinionMap* source, int depth)
 {
-    int len = source.size * 2;
-    int pad = -1;
-    int new_depth = -1;
-    if (depth >= 0)
-        new_depth = depth + 1;
-    pad = new_depth * indent;
-    dump_ch('{');
-    for (int i = 0; i < len; ++i) {
-        dump_pad(pad);
-        auto key = static_cast<MinionValue*>(source.data)[i];
-        if (key.type != T_String)
-            return false;
-        dump_string((char*) key.data);
-        dump_ch(':');
+    dump_buffer.push_back('{');
+    int len = source->size();
+    if (len != 0) {
+        int pad = -1;
+        int new_depth = -1;
         if (depth >= 0)
-            dump_ch(' ');
-        if (!dump_value(static_cast<MinionValue*>(source.data)[++i], new_depth))
-            return false;
-        dump_ch(',');
+            new_depth = depth + 1;
+        pad = new_depth * indent;
+        for (int i = 0; i < len; ++i) {
+            dump_pad(pad);
+            auto m = source->at(i);
+            dump_string(*m.key);
+            dump_buffer.push_back(':');
+            if (depth >= 0)
+                dump_buffer.push_back(' ');
+            if (!dump_value(m.value, new_depth))
+                return false;
+            dump_buffer.push_back(',');
+        }
+        dump_buffer.pop_back();
+        dump_pad(depth * indent);
     }
-    undump_ch();
-    dump_pad(depth * indent);
-    dump_ch('}');
+    dump_buffer.push_back('}');
     return true;
 }
 
 bool Minion::dump_value(
-    MinionValue source, int depth)
+    const MinionValue* source, int depth)
 {
-    bool ok = true;
-    switch (source.type) {
-    case T_String:
-        // Strings don't receive any extra formatting
-        dump_string(static_cast<char*>(source.data));
-        break;
-    case T_Array:
-        ok = dump_list(source, depth);
-        break;
-    case T_PairArray:
-        ok = dump_map(source, depth);
-        break;
-    default:
-        ok = false;
+    if (const auto s = std::get_if<std::string>(source)) {
+        dump_string(*s);
+    } else if (const auto l = std::get_if<MinionList>(source)) {
+        dump_list(l, depth);
+    } else if (const auto m = std::get_if<MinionMap>(source)) {
+        dump_map(m, depth);
+    } else {
+        return false;
     }
-    return ok;
+    return true;
 }
 
-char* Minion::dump(
-    MinionValue source, int depth)
+const char* Minion::dump(
+    MinionValue* source, int pretty)
 {
-    clear_dump_buffer();
+    int depth = -1;
+    if (pretty >= 0) {
+        depth = 0;
+        indent = pretty;
+    }
+    dump_buffer.clear();
     if (dump_value(source, depth)) {
-        dump_ch(0);
-        return dump_buffer;
+        return dump_buffer.c_str();
     }
     return 0;
 }
-*/
 
 } // End of namespace minion
 

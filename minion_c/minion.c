@@ -1056,20 +1056,23 @@ void dump_pad(
 bool dump_list(
     minion_value source, int depth)
 {
-    int pad = -1;
-    int new_depth = -1;
-    if (depth >= 0)
-        new_depth = depth + 1;
-    pad = new_depth * indent;
     dump_ch('[');
-    for (msize i = 0; i < source.size; ++i) {
-        dump_pad(pad);
-        if (!dump_value(((minion_value*) source.data)[i], new_depth))
-            return false;
-        dump_ch(',');
+    msize len = source.size;
+    if (len != 0) {
+    	int pad = -1;
+    	int new_depth = -1;
+    	if (depth >= 0)
+        	new_depth = depth + 1;
+    	pad = new_depth * indent;
+    	for (msize i = 0; i < len; ++i) {
+        	dump_pad(pad);
+        	if (!dump_value(((minion_value*) source.data)[i], new_depth))
+            	return false;
+        	dump_ch(',');
+    	}
+    	undump_ch();
+    	dump_pad(depth * indent);
     }
-    undump_ch();
-    dump_pad(depth * indent);
     dump_ch(']');
     return true;
 }
@@ -1077,27 +1080,30 @@ bool dump_list(
 bool dump_map(
     minion_value source, int depth)
 {
-    int pad = -1;
-    int new_depth = -1;
-    if (depth >= 0)
-        new_depth = depth + 1;
-    pad = new_depth * indent;
     dump_ch('{');
-    for (msize i = 0; i < source.size; ++i) {
-        dump_pad(pad);
-        minion_pair mp = ((minion_pair*) source.data)[i];
-        if (mp.key.type != T_String)
-            return false;
-        dump_string(mp.key.data);
-        dump_ch(':');
-        if (depth >= 0)
-            dump_ch(' ');
-        if (!dump_value(mp.value, new_depth))
-            return false;
-        dump_ch(',');
+    msize len = source.size;
+    if (len != 0) {
+    	int pad = -1;
+    	int new_depth = -1;
+    	if (depth >= 0)
+        	new_depth = depth + 1;
+    	pad = new_depth * indent;
+    	for (msize i = 0; i < len; ++i) {
+        	dump_pad(pad);
+        	minion_pair mp = ((minion_pair*) source.data)[i];
+        	if (mp.key.type != T_String)
+            	return false;
+        	dump_string(mp.key.data);
+        	dump_ch(':');
+        	if (depth >= 0)
+            	dump_ch(' ');
+        	if (!dump_value(mp.value, new_depth))
+            	return false;
+        	dump_ch(',');
+    	}
+    	undump_ch();
+    	dump_pad(depth * indent);
     }
-    undump_ch();
-    dump_pad(depth * indent);
     dump_ch('}');
     return true;
 }

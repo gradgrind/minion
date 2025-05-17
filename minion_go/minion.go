@@ -687,44 +687,50 @@ func dump_pad(n int) {
 }
 
 func dump_list(source MinionValue, indent int) bool {
-	var new_depth int = -1
-	if indent >= 0 {
-		new_depth = indent + 1
-	}
 	dump_buffer = append(dump_buffer, '[')
-	for _, m := range source.Data.(MinionArray) {
-		dump_pad(new_depth)
-		if !dump_value(m, new_depth) {
-			return false
+	a := source.Data.(MinionArray)
+	if len(a) != 0 {
+		var new_depth int = -1
+		if indent >= 0 {
+			new_depth = indent + 1
 		}
-		dump_buffer = append(dump_buffer, ',')
+		for _, m := range a {
+			dump_pad(new_depth)
+			if !dump_value(m, new_depth) {
+				return false
+			}
+			dump_buffer = append(dump_buffer, ',')
+		}
+		dump_buffer = dump_buffer[:len(dump_buffer)-1] // remove last ','
+		dump_pad(indent)
 	}
-	dump_buffer = dump_buffer[:len(dump_buffer)-1] // remove last ','
-	dump_pad(indent)
 	dump_buffer = append(dump_buffer, ']')
 	return true
 }
 
 func dump_map(source MinionValue, indent int) bool {
-	var new_depth int = -1
-	if indent >= 0 {
-		new_depth = indent + 1
-	}
 	dump_buffer = append(dump_buffer, '{')
-	for _, m := range source.Data.(MinionPairArray) {
-		dump_pad(new_depth)
-		dump_string(string(m.Key))
-		dump_buffer = append(dump_buffer, ':')
+	a := source.Data.(MinionPairArray)
+	if len(a) != 0 {
+		var new_depth int = -1
 		if indent >= 0 {
-			dump_buffer = append(dump_buffer, ' ')
+			new_depth = indent + 1
 		}
-		if !dump_value(m.Value, new_depth) {
-			return false
+		for _, m := range a {
+			dump_pad(new_depth)
+			dump_string(string(m.Key))
+			dump_buffer = append(dump_buffer, ':')
+			if indent >= 0 {
+				dump_buffer = append(dump_buffer, ' ')
+			}
+			if !dump_value(m.Value, new_depth) {
+				return false
+			}
+			dump_buffer = append(dump_buffer, ',')
 		}
-		dump_buffer = append(dump_buffer, ',')
+		dump_buffer = dump_buffer[:len(dump_buffer)-1] // remove last ','
+		dump_pad(indent)
 	}
-	dump_buffer = dump_buffer[:len(dump_buffer)-1] // remove last ','
-	dump_pad(indent)
 	dump_buffer = append(dump_buffer, '}')
 	return true
 }

@@ -22,40 +22,6 @@ public:
         : runtime_error(message) {}
 };
 
-/*
-class MinionValue
-{
-    friend class Minion; // TODO?
-
-    short type;
-    short flags;
-    int size;
-    void* data;
-
-    // constructor for explicit initialization
-    MinionValue(short vtype, short vflags, int vsize, void* vdata);
-
-public:
-    MinionValue(); // null value constructor
-    MinionValue(const char* text, bool simple = false); // string constructor
-    // list/map constructor:
-    MinionValue(MinionValue* items, int size, bool map = false);
-    ~MinionValue();
-    bool is_string();
-    bool is_list();
-    bool is_map();
-    //TODO-- char* error_message();
-    MinionValue find(const char* key); // only applicable to maps
-};
-
-struct map_item {
-    MinionValue key;
-    MinionValue value;
-//TODO?
-//    minion_map_item(char* k, MinionValue v) : key{k}, value{v} {}
-};
-*/
-
 // Used for recording read-position in input text
 struct position
 {
@@ -79,46 +45,13 @@ class MinionList : public std::vector<MinionValue*>
 class MinionMap : public std::vector<map_pair>
 {};
 
-/*
-// MinionValue is a fairly opaque class. Its actual data is managed by
-// a Minion instance, and is accessible using methods of that instance.
-class MinionValue
-    : std::variant<std::monostate, std::string, std::vector<MinionValue*>, std::vector<map_pair>>
-{
-    friend class Minion; // TODO?
-
-    short type;
-    short flags;
-    int data_index;
-
-    // null value constructor
-    MinionValue();
-    // constructor for explicit initialization
-    MinionValue(short type, short flags, int data);
-
-public:
-    bool is_string();
-    bool is_list();
-    bool is_map();
-
-    //TODO?
-    bool is_error();
-};
-
-union minion_data {
-    std::string* s;
-    std::vector<MinionValue>* l;
-    std::vector<map_pair>* m;
-};
-*/
-
 class Minion
 {
     // The addresses of all heap-allocated MinionValue items are stacked
     // here as the "owning" pointers, so that deletion can be centrally
-    // managed. All MinionValue pointers in the data structures are then
-    // "weak" pointers, whose validity depends on the management of this
-    // stack.
+    // managed (see free_data()). All MinionValue pointers in the data
+    // structures are then "weak" pointers, whose validity depends on the
+    // management of this stack.
     std::vector<MinionValue*> data;
 
     // For character-by-character reading of MINION input.
@@ -145,9 +78,9 @@ class Minion
     void error(std::string_view msg);
 
     int get_item();
-    int get_string();
-    int get_list();
-    int get_map();
+    void get_string();
+    void get_list();
+    void get_map();
 
     char read_ch(bool instring);
     void unread_ch();
@@ -156,7 +89,8 @@ class Minion
     bool add_unicode_to_read_buffer(int len);
 
 public:
-    MinionValue read(std::string_view input);
+    MinionValue* read(std::string_view input);
+    void free_data();
 
     /*?
     void clear_dump_buffer();
@@ -164,7 +98,6 @@ public:
     void undump_ch();
     MinionValue* find_macro(char* name);
     void remember(MinionValue minion_item);
-    MinionValue last_item();
     bool is_key_unique(int i_start);
     void dump_string(const char* source);
     void dump_pad(int n);

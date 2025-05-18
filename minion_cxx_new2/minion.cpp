@@ -21,29 +21,6 @@ typedef enum {
     T_Token_Colon,
 } minion_type;
 
-/*
-bool MinionValue::is_string()
-{
-    return (type == T_String);
-}
-
-bool MinionValue::is_list()
-{
-    return (type == T_Array);
-}
-
-bool MinionValue::is_map()
-{
-    return (type == T_PairArray);
-}
-
-//TODO?
-bool MinionValue::is_error()
-{
-    return (flags == T_Error);
-}
-*/
-
 /* *** Memory management ***
  * The Minion class manages memory allocation for MINION items and the
  * buffers needed for parsing and building them. A MinionValue is thus
@@ -69,6 +46,85 @@ bool MinionValue::is_error()
  * kind, returning its type.
  */
 
+// Represent number as a string with hexadecimal digits, at least minwidth.
+std::string to_hex(
+    long val, int minwidth)
+{
+    std::string s;
+    if (val >= 16 || minwidth > 1) {
+        s = to_hex(val / 16, minwidth - 1);
+        val %= 16;
+    }
+    if (val < 10)
+        s.push_back('0' + val);
+    else
+        s.push_back('A' + val - 10);
+    return s;
+}
+
+char InputBuffer::read_ch(
+    bool instring)
+{
+    if (ch_index >= input.size())
+        return 0;
+    char ch = input.at(ch_index);
+    ++ch_index;
+    if (ch == '\n') {
+        ++line_index;
+        ch_linestart = ch_index;
+        // these are not acceptable within delimited strings
+        if (!instring) {
+            // separator
+            return ch;
+        }
+        error(std::string("Unexpected newline in delimited string at line ")
+                  .append(std::to_string(line_index)));
+    } else if (ch == '\r' || ch == '\t') {
+        // these are acceptable in the source, but not within strings.
+        if (!instring) {
+            // separator
+            return ' ';
+        }
+    } else if ((unsigned char) ch >= 32 && ch != 127) {
+        return ch;
+    }
+    error(std::string("Illegal character (byte) 0x")
+              .append(to_hex(ch, 2))
+              .append(" at position ")
+              .append(pos(here())));
+    return 0; // unreachable
+}
+
+void InputBuffer::unread_ch()
+{
+    if (ch_index == 0) {
+        error("[BUG] unread_ch reached start of data");
+    }
+    --ch_index;
+    //NOTE: '\n' is never unread!
+}
+
+void InputBuffer::error(
+    std::string_view msg)
+{
+    // Add most recently read characters
+    int ch_start = 0;
+    int recent = ch_index - ch_start;
+    if (recent > 80) {
+        ch_start = ch_index - 80;
+        // Find start of utf-8 sequence
+        while (true) {
+            unsigned char ch = input[ch_start];
+            if (ch < 0x80 || (ch >= 0xC0 && ch < 0xF8))
+                break;
+            ++ch_start;
+        }
+        recent = ch_index - ch_start;
+    }
+    auto mx = std::string{msg}.append("\n ... ").append(&input[ch_start], recent);
+    throw MinionError(mx);
+}
+
 /* Read the next "item" from the input.
  * Return the minion_type of the item read, which may be a string, a
  * macro name, an "array" (list) or an "object" (map). If the input is
@@ -80,14 +136,15 @@ bool MinionValue::is_error()
  * too small. Compound items are constructed by reading their components
  * onto a stack, remembered_items.
 */
-int Minion::get_item()
+int InputBuffer::get_item(
+    MValue& value_buffer)
 {
     char ch;
-    read_buffer.clear();
+    ch_buffer.clear();
     int result;
     while (true) {
         ch = read_ch(false);
-        if (read_buffer.size() != 0) {
+        if (ch_buffer.size() != 0) {
             // An undelimited string item has already been started
             while (true) {
                 // Test for an item-terminating character
@@ -104,18 +161,16 @@ int Minion::get_item()
                     s.push_back(ch);
                     error(s.append("' at position ").append(pos(here())));
                 }
-                read_buffer.push_back(ch);
+                ch_buffer.push_back(ch);
                 ch = read_ch(false);
             }
             // Check whether macro name
-            if (read_buffer[0] == '&') {
+            if (ch_buffer[0] == '&') {
                 result = T_Macro;
                 break;
             }
-            // A string without delimiters, push to data and remember stacks
-            auto m = new MinionValue(read_buffer);
-            data.emplace_back(std::unique_ptr<MinionValue>(m));
-            remembered_items.push_back(m);
+            // A string without delimiters
+            value_buffer = std::move(MString(ch_buffer));
             result = T_String;
             break;
         }
@@ -166,18 +221,19 @@ int Minion::get_item()
         // Delimited string
         if (ch == '"') {
             get_string();
+            value_buffer = std::move(MString(ch_buffer));
             result = T_String;
             break;
         }
         // list
         if (ch == '[') {
-            get_list();
+            value_buffer = std::move(get_list());
             result = T_PairArray;
             break;
         }
         // map
         if (ch == '{') {
-            get_map();
+            value_buffer = std::move(get_map());
             result = T_PairArray;
             break;
         }
@@ -198,7 +254,7 @@ int Minion::get_item()
             result = T_Token_Comma;
             break;
         }
-        read_buffer.push_back(ch); // start undelimited string
+        ch_buffer.push_back(ch); // start undelimited string
     } // End of item-seeking loop
     return result;
 }
@@ -211,9 +267,9 @@ int Minion::get_item()
  * Escapes, introduced by '\', are possible. These are an extension of the
  * JSON escapes – see the MINION specification.
  *
- * Push the string as a MinionValue* to the data and remember stacks.
+ * The string is available in ch_buffer
  */
-void Minion::get_string()
+void InputBuffer::get_string()
 {
     position start_pos = here();
     char ch;
@@ -248,13 +304,13 @@ void Minion::get_string()
                 ch = '\r';
                 break;
             case 'u':
-                if (add_unicode_to_read_buffer(4))
+                if (add_unicode_to_ch_buffer(4))
                     continue;
                 error(
                     std::string("Invalid unicode escape in string, position ").append(pos(here())));
                 break; // unreachable
             case 'U':
-                if (add_unicode_to_read_buffer(6))
+                if (add_unicode_to_ch_buffer(6))
                     continue;
                 error(
                     std::string("Invalid unicode escape in string, position ").append(pos(here())));
@@ -286,15 +342,12 @@ void Minion::get_string()
                 error(std::string("Illegal string escape at position ").append(pos(here())));
             }
         }
-        read_buffer.push_back(ch);
+        ch_buffer.push_back(ch);
     }
-    auto m = new MinionValue(read_buffer);
-    data.emplace_back(std::unique_ptr<MinionValue>(m));
-    remembered_items.push_back(m);
 }
 
 // Convert a unicode code point (as hex string) to a UTF-8 string
-bool Minion::add_unicode_to_read_buffer(
+bool InputBuffer::add_unicode_to_ch_buffer(
     int len)
 {
     // Convert the unicode to an integer
@@ -316,19 +369,19 @@ bool Minion::add_unicode_to_read_buffer(
     }
     // Convert the code point to a UTF-8 string
     if (code_point <= 0x7F) {
-        read_buffer.push_back(code_point);
+        ch_buffer.push_back(code_point);
     } else if (code_point <= 0x7FF) {
-        read_buffer.push_back((code_point >> 6) | 0xC0);
-        read_buffer.push_back((code_point & 0x3F) | 0x80);
+        ch_buffer.push_back((code_point >> 6) | 0xC0);
+        ch_buffer.push_back((code_point & 0x3F) | 0x80);
     } else if (code_point <= 0xFFFF) {
-        read_buffer.push_back((code_point >> 12) | 0xE0);
-        read_buffer.push_back(((code_point >> 6) & 0x3F) | 0x80);
-        read_buffer.push_back((code_point & 0x3F) | 0x80);
+        ch_buffer.push_back((code_point >> 12) | 0xE0);
+        ch_buffer.push_back(((code_point >> 6) & 0x3F) | 0x80);
+        ch_buffer.push_back((code_point & 0x3F) | 0x80);
     } else if (code_point <= 0x10FFFF) {
-        read_buffer.push_back((code_point >> 18) | 0xF0);
-        read_buffer.push_back(((code_point >> 12) & 0x3F) | 0x80);
-        read_buffer.push_back(((code_point >> 6) & 0x3F) | 0x80);
-        read_buffer.push_back((code_point & 0x3F) | 0x80);
+        ch_buffer.push_back((code_point >> 18) | 0xF0);
+        ch_buffer.push_back(((code_point >> 12) & 0x3F) | 0x80);
+        ch_buffer.push_back(((code_point >> 6) & 0x3F) | 0x80);
+        ch_buffer.push_back((code_point & 0x3F) | 0x80);
     } else {
         // Invalid input
         return false;
@@ -336,21 +389,23 @@ bool Minion::add_unicode_to_read_buffer(
     return true;
 }
 
-void Minion::get_list()
+MList InputBuffer::get_list()
 {
-    int start_index = remembered_items.size();
+    MList mlist;
+    MValue value_buffer;
     position current_pos = here();
-    short mtype = get_item();
+    auto mtype = get_item(value_buffer);
     while (true) {
         // ',' before the closing bracket is allowed
         if (mtype < T_Real_End) { // TODO: Is 0 possible?
+            mlist.add(value_buffer);
             current_pos = here();
-            mtype = get_item();
+            mtype = get_item(value_buffer);
             if (mtype == T_Token_ListEnd) {
                 break;
             } else if (mtype == T_Token_Comma) {
                 current_pos = here();
-                mtype = get_item();
+                mtype = get_item(value_buffer);
                 continue;
             }
             error(std::string("Reading list, expecting ',' or ']' at position ")
@@ -360,10 +415,8 @@ void Minion::get_list()
             break;
         if (mtype == T_Macro) {
             try {
-                auto mm = macros.at(read_buffer);
-                // Push to remember stack
-                remembered_items.push_back(mm);
-                mtype = mm->index();
+                value_buffer = macros.at(ch_buffer);
+                mtype = value_buffer.type();
                 continue;
             } catch (const std::out_of_range& e) {
                 error(std::string("Undefined macro name at position ").append(pos(current_pos)));
@@ -371,55 +424,41 @@ void Minion::get_list()
         }
         error(std::string("Expecting list item or ']' at position ").append(pos(current_pos)));
     }
-    int end = remembered_items.size();
-    auto m = new MinionValue{MinionList()};
-    auto ml = std::get_if<MinionList>(m);
-    ml->reserve(end - start_index);
-    for (int i = start_index; i < end; ++i) {
-        ml->push_back(remembered_items[i]);
-    }
-    data.emplace_back(std::unique_ptr<MinionValue>(m));
-    //remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
-    remembered_items.resize(start_index);
-    remembered_items.push_back(m);
+    return mlist;
 }
 
-void Minion::get_map()
+MMap InputBuffer::get_map()
 {
-    int start_index = remembered_items.size();
+    MMap mmap;
+    MValue value_buffer;
     position current_pos = here();
-    short mtype = get_item();
+    auto mtype = get_item(value_buffer);
     while (true) {
         // ',' before the closing bracket is allowed
         // expect key
         if (mtype == T_String) {
-            // Check uniqueness of key (end before this key!)
-            int end = remembered_items.size() - 1;
-            for (int i = start_index; i < end; i += 2) {
-                auto si = std::get_if<std::string>(remembered_items[i]);
-                if (*si == read_buffer) {
-                    error(std::string("Map key has already been defined: ")
-                              .append(read_buffer)
-                              .append(" ... current position ")
-                              .append(pos(current_pos)));
-                }
+            // Check uniqueness of key
+            if (mmap.get(ch_buffer, value_buffer)) {
+                error(std::string("Map key has already been defined: ")
+                          .append(ch_buffer)
+                          .append(" ... current position ")
+                          .append(pos(current_pos)));
             }
+            std::string s = std::move(ch_buffer); // save key
             current_pos = here();
-            mtype = get_item();
+            mtype = get_item(value_buffer);
             // expect ':'
             if (mtype != T_Token_Colon) {
                 error(
                     std::string("Expecting ':' in Map item at position ").append(pos(current_pos)));
             }
             current_pos = here();
-            mtype = get_item();
+            mtype = get_item(value_buffer);
             // expect value
             if (mtype == T_Macro) {
                 try {
-                    auto mm = macros.at(read_buffer);
-                    // Push to remember stack
-                    remembered_items.push_back(mm);
-                    mtype = mm->index();
+                    value_buffer = macros.at(ch_buffer);
+                    mtype = value_buffer.type();
                 } catch (const std::out_of_range& e) {
                     error(std::string("Expecting map value, undefined macro name at position ")
                               .append(pos(current_pos)));
@@ -427,14 +466,14 @@ void Minion::get_map()
             } else if (mtype >= T_Real_End) { // TODO: Is 0 possible?
                 error(std::string("Expecting map value at position ").append(pos(current_pos)));
             }
-
+            mmap.add({std::move(s), std::move(value_buffer)});
             current_pos = here();
-            mtype = get_item();
+            mtype = get_item(value_buffer);
             if (mtype == T_Token_MapEnd) {
                 break;
             } else if (mtype == T_Token_Comma) {
                 current_pos = here();
-                mtype = get_item();
+                mtype = get_item(value_buffer);
                 continue;
             }
             error(std::string("Reading map, expecting ',' or '}' at position ")
@@ -444,39 +483,7 @@ void Minion::get_map()
         }
         error(std::string("Reading map, expecting a key at position ").append(pos(current_pos)));
     }
-    int end = remembered_items.size();
-    auto m = new MinionValue{MinionMap()};
-    auto ml = std::get_if<MinionMap>(m);
-    ml->reserve((end - start_index) / 2);
-    for (int i = start_index; i < end; ++i) {
-        auto mk = std::get_if<std::string>(remembered_items[i]);
-        ml->push_back({mk, remembered_items[++i]});
-    }
-    data.emplace_back(std::unique_ptr<MinionValue>(m));
-    //remembered_items.erase(remembered_items.begin() + start_index, remembered_items.end());
-    remembered_items.resize(start_index);
-    remembered_items.push_back(m);
-}
-
-void Minion::error(
-    std::string_view msg)
-{
-    // Add most recently read characters
-    int ch_start = 0;
-    int recent = ch_index - ch_start;
-    if (recent > 80) {
-        ch_start = ch_index - 80;
-        // Find start of utf-8 sequence
-        while (true) {
-            unsigned char ch = input_string[ch_start];
-            if (ch < 0x80 || (ch >= 0xC0 && ch < 0xF8))
-                break;
-            ++ch_start;
-        }
-        recent = ch_index - ch_start;
-    }
-    auto mx = std::string{msg}.append("\n ... ").append(&input_string[ch_start], recent);
-    throw MinionError(mx);
+    return mmap;
 }
 
 // *** Serializing MINION ***
@@ -521,113 +528,42 @@ MinionValue Minion::new_map(std::initializer_list<map_item> items)
 }
 */
 
-position Minion::here()
+MValue* InputBuffer::read(
+    std::string& input_string)
 {
-    return {line_index + 1, static_cast<int>((ch_index - ch_linestart))};
-}
-
-std::string Minion::pos(
-    position p)
-{
-    return std::to_string(p.line_n) + '.' + std::to_string(p.byte_ix);
-}
-
-// Represent number as a string with hexadecimal digits, at least minwidth. 
-std::string to_hex(long val, int minwidth)
-{
-    std::string s;
-    if (val >= 16 || minwidth > 1) {
-        s = to_hex(val/16, minwidth - 1);
-        val %= 16;
-    }
-    if (val < 10) s.push_back('0' + val);
-    else s.push_back('A' + val - 10);
-    return s;
-}
-
-char Minion::read_ch(
-    bool instring)
-{
-    if (static_cast<size_t>(ch_index) >= input_string.size())
-        return 0;
-    char ch = input_string.at(ch_index);
-    ++ch_index;
-    if (ch == '\n') {
-        ++line_index;
-        ch_linestart = ch_index;
-        // these are not acceptable within delimited strings
-        if (!instring) {
-            // separator
-            return ch;
-        }
-        error(std::string("Unexpected newline in delimited string at line ")
-            .append(std::to_string(line_index)));
-    } else if (ch == '\r' || ch == '\t') {
-        // these are acceptable in the source, but not within strings.
-        if (!instring) {
-            // separator
-            return ' ';
-        }
-    } else if ((unsigned char) ch >= 32 && ch != 127) {
-        return ch;
-    }
-    error(std::string("Illegal character (byte) 0x")
-        .append(to_hex(ch, 2))
-        .append(" at position ")
-        .append(pos(here())));
-    return 0; // unreachable
-}
-
-void Minion::unread_ch()
-{
-    if (ch_index == 0) {
-        error("[BUG] unread_ch reached start of data");
-    }
-    --ch_index;
-    //NOTE: '\n' is never unread!
-}
-
-MinionValue* Minion::read(
-    std::string_view input)
-{
-    data.clear();
-    macros.clear();
-    remembered_items.clear();
-
-    input_string = input;
+    input = input_string;
     ch_index = 0;
-    ch_linestart = 0;
     line_index = 0;
+    ch_linestart = 0;
+    macros.clear();
 
     while (true) {
         position current_pos = here();
-        short mtype = get_item();
+        short mtype = get_item(data);
         if (mtype == T_Macro) {
             // Check for duplicate
-            if (macros.contains(read_buffer)) {
+            if (macros.contains(ch_buffer)) {
                 error(std::string("Position ")
                           .append(pos(current_pos))
                           .append(": macro name already defined"));
             }
-            auto mkey = new MinionValue{read_buffer};
-            data.emplace_back(std::unique_ptr<MinionValue>(mkey));
+            std::string mkey = std::move(ch_buffer);
             current_pos = here();
             // expect ':'
-            mtype = get_item();
+            mtype = get_item(data);
             if (mtype != T_Token_Colon) {
                 error(std::string("Expecting ':' in macro definition at position ")
                           .append(pos(current_pos)));
             }
             current_pos = here();
-            mtype = get_item();
+            mtype = get_item(data);
             // expect value
             if (mtype < T_Real_End) { // TODO: Is 0 possible?
+                // Add the macro
+                macros.emplace(std::move(mkey), std::move(data));
                 // expect ','
-                mtype = get_item();
+                mtype = get_item(data);
                 if (mtype == T_Token_Comma) {
-                    // Add the macro
-                    macros[*get_if<std::string>(mkey)] = remembered_items.back();
-                    remembered_items.clear();
                     continue;
                 }
                 error(std::string("After macro definition: expecting ',' at position ")
@@ -648,179 +584,171 @@ MinionValue* Minion::read(
     }
     // "Real" minion item, not macro definition, found.
     // This should be the document content.
-    auto m = remembered_items.back();
-    remembered_items.clear();
 
     //TODO: unused macros may be an error?
 
     // Check that there are no further items
-    position current_position = here();
-    if (get_item() != T_Token_End) {
+    position current_pos = here();
+    if (get_item(data) != T_Token_End) {
         error(std::string("Position ")
-                  .append(pos(current_position))
+                  .append(pos(current_pos))
                   .append(": unexpected item after document item"));
     }
-    return m;
+    return &data;
 }
 
-void Minion::dump_string(
-    const std::string_view source)
+void DumpBuffer::dump_string(
+    std::string& source)
 {
-    dump_buffer.push_back('"');
+    add('"');
     for (unsigned char ch : source) {
         switch (ch) {
         case '"':
-            dump_buffer.push_back('\\');
-            dump_buffer.push_back('"');
+            add('\\');
+            add('"');
             break;
         case '\n':
-            dump_buffer.push_back('\\');
-            dump_buffer.push_back('n');
+            add('\\');
+            add('n');
             break;
         case '\t':
-            dump_buffer.push_back('\\');
-            dump_buffer.push_back('t');
+            add('\\');
+            add('t');
             break;
         case '\b':
-            dump_buffer.push_back('\\');
-            dump_buffer.push_back('b');
+            add('\\');
+            add('b');
             break;
         case '\f':
-            dump_buffer.push_back('\\');
-            dump_buffer.push_back('f');
+            add('\\');
+            add('f');
             break;
         case '\r':
-            dump_buffer.push_back('\\');
-            dump_buffer.push_back('r');
+            add('\\');
+            add('r');
             break;
         case '\\':
-            dump_buffer.push_back('\\');
-            dump_buffer.push_back('\\');
+            add('\\');
+            add('\\');
             break;
         case 127:
-            dump_buffer.push_back('\\');
-            dump_buffer.push_back('u');
-            dump_buffer.push_back('0');
-            dump_buffer.push_back('0');
-            dump_buffer.push_back('7');
-            dump_buffer.push_back('F');
+            add('\\');
+            add('u');
+            add('0');
+            add('0');
+            add('7');
+            add('F');
             break;
         default:
             if (ch >= 32) {
-                dump_buffer.push_back(ch);
+                add(ch);
             } else {
-                dump_buffer.push_back('\\');
-                dump_buffer.push_back('u');
-                dump_buffer.push_back('0');
-                dump_buffer.push_back('0');
+                add('\\');
+                add('u');
+                add('0');
+                add('0');
                 if (ch >= 16) {
-                    dump_buffer.push_back('1');
+                    add('1');
                     ch -= 16;
                 } else
-                    dump_buffer.push_back('0');
+                    add('0');
                 if (ch >= 10)
-                    dump_buffer.push_back('A' + ch - 10);
+                    add('A' + ch - 10);
                 else
-                    dump_buffer.push_back('0' + ch);
+                    add('0' + ch);
             }
         }
     }
-    dump_buffer.push_back('"');
+    add('"');
 }
 
-void Minion::dump_pad(
-    int n)
+void DumpBuffer::dump_pad()
 {
-    if (n >= 0) {
-        dump_buffer.push_back('\n');
-        while (n > 0) {
-            dump_buffer.push_back(' ');
-            --n;
-        }
+    if (depth >= 0) {
+        add('\n');
+        for (int i = 0; i < depth * indent; ++i)
+            add(' ');
     }
 }
 
-bool Minion::dump_list(
-    const MinionList* source, int depth)
+void DumpBuffer::dump_list(
+    MList& source)
 {
-    dump_buffer.push_back('[');
-    int len = source->size();
+    add('[');
+    auto l = source.data;
+    int len = l.size();
     if (len != 0) {
-        int pad = -1;
-        int new_depth = -1;
+        auto d = depth;
         if (depth >= 0)
-            new_depth = depth + 1;
-        pad = new_depth * indent;
+            ++depth;
         for (int i = 0; i < len; ++i) {
-            dump_pad(pad);
-            if (!dump_value(source->at(i), new_depth))
-                return false;
-            dump_buffer.push_back(',');
+            dump_pad();
+            dump_value(l.at(i));
+            add(',');
         }
-        dump_buffer.pop_back();
-        dump_pad(depth * indent);
+        depth = d;
+        pop();
+        dump_pad();
     }
-    dump_buffer.push_back(']');
-    return true;
+    add(']');
 }
 
-bool Minion::dump_map(
-    const MinionMap* source, int depth)
+void DumpBuffer::dump_map(
+    MMap& source)
 {
-    dump_buffer.push_back('{');
-    int len = source->size();
+    add('{');
+    auto m = source.data;
+    int len = m.size();
     if (len != 0) {
-        int pad = -1;
-        int new_depth = -1;
+        auto d = depth;
         if (depth >= 0)
-            new_depth = depth + 1;
-        pad = new_depth * indent;
+            ++depth;
         for (int i = 0; i < len; ++i) {
-            dump_pad(pad);
-            auto m = source->at(i);
-            dump_string(*m.key);
-            dump_buffer.push_back(':');
+            dump_pad();
+            auto mp = &m.at(i);
+            dump_string(mp->key);
+            add(':');
             if (depth >= 0)
-                dump_buffer.push_back(' ');
-            if (!dump_value(m.value, new_depth))
-                return false;
-            dump_buffer.push_back(',');
+                add(' ');
+            dump_value(mp->value);
+            add(',');
         }
-        dump_buffer.pop_back();
-        dump_pad(depth * indent);
+        depth = d;
+        pop();
+        dump_pad();
     }
-    dump_buffer.push_back('}');
-    return true;
+    add('}');
 }
 
-bool Minion::dump_value(
-    const MinionValue* source, int depth)
+void DumpBuffer::dump_value(
+    MValue& source)
 {
-    if (const auto s = std::get_if<std::string>(source)) {
-        dump_string(*s);
-    } else if (const auto l = std::get_if<MinionList>(source)) {
-        dump_list(l, depth);
-    } else if (const auto m = std::get_if<MinionMap>(source)) {
-        dump_map(m, depth);
-    } else {
-        return false;
+    switch (source.type()) {
+    case T_String:
+        dump_string(static_cast<MString&>(source).data);
+        break;
+    case T_Array:
+        dump_list(static_cast<MList&>(source));
+        break;
+    case T_PairArray:
+        dump_map(static_cast<MMap&>(source));
+        break;
+    default:
+        throw "[BUG] MINION dump: bad MValue type";
     }
-    return true;
 }
 
-const char* Minion::dump(
-    MinionValue* source, int pretty)
+const char* DumpBuffer::dump(
+    MValue& data, int pretty)
 {
-    int depth = -1;
+    depth = -1;
     if (pretty >= 0) {
         depth = 0;
         indent = pretty;
     }
-    dump_buffer.clear();
-    if (dump_value(source, depth)) {
-        return dump_buffer.c_str();
-    }
-    return 0;
+    buffer.clear();
+    dump_value(data);
+    return buffer.c_str();
 }
 
 } // End of namespace minion

@@ -25,79 +25,28 @@ struct position
     size_t byte_ix;
 };
 
-class DumpBuffer; // forward declaration
+//class DumpBuffer; // forward declaration
 
-class MValue
+struct MValue
 {
-public:
-    virtual ~MValue() {};
-    virtual int type() { return 0; }
+    int type;
+    void* minion_item;
 };
 
-class MString : public MValue
-{
-    friend DumpBuffer;
-    std::string data;
-
-public:
-    MString(
-        const std::string_view s)
-        : MValue()
-    {
-        data = s;
-    }
-    int type() override { return 1; }
-};
-
-class MList : public MValue
-{
-    friend DumpBuffer;
-    std::vector<MValue> data;
-
-public:
-    int type() override { return 2; }
-    void add(
-        MValue m)
-    {
-        data.emplace_back(std::move(m));
-    }
-    bool dump(DumpBuffer& buffer);
-};
+using MString = std::string;
+using MList = std::vector<MValue>;
 
 struct MPair
 {
-    std::string key;
+    MString key;
     MValue value;
 };
 
-class MMap : public MValue
-{
-    friend DumpBuffer;
-    std::vector<MPair> data;
-
-public:
-    int type() override { return 3; }
-    void add(
-        MPair m)
-    {
-        data.emplace_back(std::move(m));
-    }
-    bool get(
-        std::string& key, MValue& value)
-    {
-        for (const auto& kv : data) {
-            if (kv.key == key) {
-                value = kv.value;
-                return true;
-            }
-        }
-        return false;
-    }
-};
+using MMap = std::vector<MPair>;
 
 class InputBuffer
 {
-    MValue data;
+    //MValue data;
     std::string_view input;
     size_t ch_index;
     size_t line_index;
@@ -117,11 +66,11 @@ class InputBuffer
     int get_item(MValue& value_buffer);
     void get_string();
     bool add_unicode_to_ch_buffer(int len);
-    MList get_list();
-    MMap get_map();
+    void get_list(MValue& value_buffer);
+    void get_map(MValue& value_buffer);
 
 public:
-    MValue* read(std::string& s);
+    MValue read(std::string& s);
 };
 
 class DumpBuffer
@@ -136,8 +85,8 @@ class DumpBuffer
         buffer.push_back(ch);
     }
     void pop() { buffer.pop_back(); }
-    void dump_value(MValue& source);
-    void dump_string(std::string& source);
+    void dump_value(const MValue& source);
+    void dump_string(const std::string& source);
     void dump_list(MList& source);
     void dump_map(MMap& source);
     void dump_pad();

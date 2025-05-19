@@ -6,38 +6,22 @@
 
 using namespace minion;
 
-struct Value
-{
-    short type;
-    short flags;
-    int size;
-    union {
-        char* s;
-        Value* l;
-        int* m;
-    };
-
-    /*
-    Value()
-        : type{0}
-        , flags{0}
-        , size{0}
-        , s{nullptr}
-    {}
-    */
-};
-
-struct S
-{
-    std::string name;
-    int one;
-    int two;
-
-    ~S() { printf("-- deleting %d\n", one); }
-};
 
 int main()
 {
+    /*
+    {
+        MValue m1{new MString("M1")};
+        MValue m2{new MString("M2")};
+        MValue m3 = m1;
+        MValue m4 = std::move(m2);
+        MValue m5;
+        m5 = std::move(m3);
+    }
+
+    exit(0);
+    */
+
     /*
     std::vector<std::unique_ptr<S>> vec;
     for (int i = 0; i < 4; ++i) {
@@ -92,7 +76,6 @@ int main()
 
     InputBuffer miniondata;
 
-    /*
     for (int count = 0; count < 10; ++count) {
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
@@ -103,13 +86,12 @@ int main()
         elapsed += (end.tv_nsec - start.tv_nsec) / 1000.0;
         printf("%0.2f microseconds elapsed\n", elapsed);
     }
-*/
+
     try {
         auto m = miniondata.read(indata);
 
-        //TODO++
         DumpBuffer dump_buffer;
-        const char* result = dump_buffer.dump(*m, 2);
+        const char* result = dump_buffer.dump(m, 2);
         if (result)
             printf("\n -->\n%s\n", result);
         else

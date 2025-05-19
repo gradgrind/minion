@@ -40,6 +40,26 @@ typedef enum {
  * to a macro is found, its MinionValue address can be got from the map.
  */
 
+void delete_mvalue(
+    MValue& m)
+{
+    //printf("Delete MValue: %d\n", type);
+    switch (m.type) {
+    case T_String:
+        //printf("Delete string: %lu\n", m.minion_item);
+        delete reinterpret_cast<MString*>(m.minion_item);
+        break;
+    case T_Array:
+        //printf("Delete list: %lu\n", m.minion_item);
+        delete reinterpret_cast<MList*>(m.minion_item);
+        break;
+    case T_PairArray:
+        //printf("Delete map: %lu\n", m.minion_item);
+        delete reinterpret_cast<MMap*>(m.minion_item);
+        break;
+    }
+}
+
 /* The "get_" family of functions reads the corresponding item from the
  * input. If the result is a minion item, that will be placed on the
  * remember stack. The "get_item" function reads the next item of any
@@ -170,7 +190,6 @@ int InputBuffer::get_item(
                 break;
             }
             // A string without delimiters
-            value_buffer = std::move(MString(ch_buffer));
             result = T_String;
             break;
         }
@@ -221,19 +240,18 @@ int InputBuffer::get_item(
         // Delimited string
         if (ch == '"') {
             get_string();
-            value_buffer = std::move(MString(ch_buffer));
             result = T_String;
             break;
         }
         // list
         if (ch == '[') {
-            value_buffer = std::move(get_list());
+            get_list(value_buffer);
             result = T_PairArray;
             break;
         }
         // map
         if (ch == '{') {
-            value_buffer = std::move(get_map());
+            get_map(value_buffer);
             result = T_PairArray;
             break;
         }
@@ -389,16 +407,18 @@ bool InputBuffer::add_unicode_to_ch_buffer(
     return true;
 }
 
-MList InputBuffer::get_list()
+void InputBuffer::get_list(
+    MValue& value_buffer)
 {
-    MList mlist;
-    MValue value_buffer;
+    auto mlist = new MList;
     position current_pos = here();
     auto mtype = get_item(value_buffer);
     while (true) {
         // ',' before the closing bracket is allowed
         if (mtype < T_Real_End) { // TODO: Is 0 possible?
-            mlist.add(value_buffer);
+            if (mtype == T_String)
+                value_buffer = {T_String, new MString(std::move(ch_buffer))};
+            mlist->emplace_back(value_buffer);
             current_pos = here();
             mtype = get_item(value_buffer);
             if (mtype == T_Token_ListEnd) {
@@ -416,7 +436,7 @@ MList InputBuffer::get_list()
         if (mtype == T_Macro) {
             try {
                 value_buffer = macros.at(ch_buffer);
-                mtype = value_buffer.type();
+                mtype = value_buffer.type;
                 continue;
             } catch (const std::out_of_range& e) {
                 error(std::string("Undefined macro name at position ").append(pos(current_pos)));
@@ -424,13 +444,23 @@ MList InputBuffer::get_list()
         }
         error(std::string("Expecting list item or ']' at position ").append(pos(current_pos)));
     }
-    return mlist;
+    value_buffer = {T_Array, mlist};
 }
 
-MMap InputBuffer::get_map()
+MValue* map_search(
+    MMap& mmap, std::string_view key)
 {
-    MMap mmap;
-    MValue value_buffer;
+    for (auto& mp : mmap) {
+        if (mp.key == key)
+            return &mp.value; //TODO: Is this really the address of value?
+    }
+    return nullptr;
+}
+
+void InputBuffer::get_map(
+    MValue& value_buffer)
+{
+    auto mmap = new MMap;
     position current_pos = here();
     auto mtype = get_item(value_buffer);
     while (true) {
@@ -438,13 +468,14 @@ MMap InputBuffer::get_map()
         // expect key
         if (mtype == T_String) {
             // Check uniqueness of key
-            if (mmap.get(ch_buffer, value_buffer)) {
+            if (map_search(*mmap, ch_buffer)) {
                 error(std::string("Map key has already been defined: ")
                           .append(ch_buffer)
                           .append(" ... current position ")
                           .append(pos(current_pos)));
             }
             std::string s = std::move(ch_buffer); // save key
+
             current_pos = here();
             mtype = get_item(value_buffer);
             // expect ':'
@@ -457,8 +488,11 @@ MMap InputBuffer::get_map()
             // expect value
             if (mtype == T_Macro) {
                 try {
+                    //TODO? This is duplicating the reference to the
+                    // macro value. If this is a problem for freeing,
+                    // a deep copy might be better.
                     value_buffer = macros.at(ch_buffer);
-                    mtype = value_buffer.type();
+                    mtype = value_buffer.type;
                 } catch (const std::out_of_range& e) {
                     error(std::string("Expecting map value, undefined macro name at position ")
                               .append(pos(current_pos)));
@@ -466,7 +500,10 @@ MMap InputBuffer::get_map()
             } else if (mtype >= T_Real_End) { // TODO: Is 0 possible?
                 error(std::string("Expecting map value at position ").append(pos(current_pos)));
             }
-            mmap.add({std::move(s), std::move(value_buffer)});
+            if (mtype == T_String)
+                value_buffer = {T_String, new MString(std::move(ch_buffer))};
+            //printf("$$ mmap.add: %d\n", value_buffer.type);
+            mmap->emplace_back(std::move(s), value_buffer);
             current_pos = here();
             mtype = get_item(value_buffer);
             if (mtype == T_Token_MapEnd) {
@@ -483,7 +520,7 @@ MMap InputBuffer::get_map()
         }
         error(std::string("Reading map, expecting a key at position ").append(pos(current_pos)));
     }
-    return mmap;
+    value_buffer = {T_PairArray, mmap};
 }
 
 // *** Serializing MINION ***
@@ -528,7 +565,7 @@ MinionValue Minion::new_map(std::initializer_list<map_item> items)
 }
 */
 
-MValue* InputBuffer::read(
+MValue InputBuffer::read(
     std::string& input_string)
 {
     input = input_string;
@@ -536,10 +573,11 @@ MValue* InputBuffer::read(
     line_index = 0;
     ch_linestart = 0;
     macros.clear();
+    MValue value_buffer;
 
     while (true) {
         position current_pos = here();
-        short mtype = get_item(data);
+        short mtype = get_item(value_buffer);
         if (mtype == T_Macro) {
             // Check for duplicate
             if (macros.contains(ch_buffer)) {
@@ -550,19 +588,21 @@ MValue* InputBuffer::read(
             std::string mkey = std::move(ch_buffer);
             current_pos = here();
             // expect ':'
-            mtype = get_item(data);
+            mtype = get_item(value_buffer);
             if (mtype != T_Token_Colon) {
                 error(std::string("Expecting ':' in macro definition at position ")
                           .append(pos(current_pos)));
             }
             current_pos = here();
-            mtype = get_item(data);
+            mtype = get_item(value_buffer);
             // expect value
             if (mtype < T_Real_End) { // TODO: Is 0 possible?
                 // Add the macro
-                macros.emplace(std::move(mkey), std::move(data));
+                if (mtype == T_String)
+                    value_buffer = {T_String, new MString(std::move(ch_buffer))};
+                macros.emplace(std::move(mkey), value_buffer);
                 // expect ','
-                mtype = get_item(data);
+                mtype = get_item(value_buffer);
                 if (mtype == T_Token_Comma) {
                     continue;
                 }
@@ -574,6 +614,8 @@ MValue* InputBuffer::read(
         }
         if (mtype < T_Real_End) { // TODO: Is 0 possible?
             // found document item
+            //TODO:  Handle T_String
+
             break;
         }
         // Invalid item
@@ -589,16 +631,16 @@ MValue* InputBuffer::read(
 
     // Check that there are no further items
     position current_pos = here();
-    if (get_item(data) != T_Token_End) {
+    if (get_item(value_buffer) != T_Token_End) {
         error(std::string("Position ")
                   .append(pos(current_pos))
                   .append(": unexpected item after document item"));
     }
-    return &data;
+    return value_buffer;
 }
 
 void DumpBuffer::dump_string(
-    std::string& source)
+    const std::string& source)
 {
     add('"');
     for (unsigned char ch : source) {
@@ -675,15 +717,14 @@ void DumpBuffer::dump_list(
     MList& source)
 {
     add('[');
-    auto l = source.data;
-    int len = l.size();
+    int len = source.size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
             ++depth;
         for (int i = 0; i < len; ++i) {
             dump_pad();
-            dump_value(l.at(i));
+            dump_value(source.at(i));
             add(',');
         }
         depth = d;
@@ -697,20 +738,18 @@ void DumpBuffer::dump_map(
     MMap& source)
 {
     add('{');
-    auto m = source.data;
-    int len = m.size();
+    int len = source.size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
             ++depth;
-        for (int i = 0; i < len; ++i) {
+        for (const auto& mp : source) {
             dump_pad();
-            auto mp = &m.at(i);
-            dump_string(mp->key);
+            dump_string(mp.key);
             add(':');
             if (depth >= 0)
                 add(' ');
-            dump_value(mp->value);
+            dump_value(mp.value);
             add(',');
         }
         depth = d;
@@ -721,17 +760,17 @@ void DumpBuffer::dump_map(
 }
 
 void DumpBuffer::dump_value(
-    MValue& source)
+    const MValue& source)
 {
-    switch (source.type()) {
+    switch (source.type) {
     case T_String:
-        dump_string(static_cast<MString&>(source).data);
+        dump_string(*reinterpret_cast<MString*>(source.minion_item));
         break;
     case T_Array:
-        dump_list(static_cast<MList&>(source));
+        dump_list(*reinterpret_cast<MList*>(source.minion_item));
         break;
     case T_PairArray:
-        dump_map(static_cast<MMap&>(source));
+        dump_map(*reinterpret_cast<MMap*>(source.minion_item));
         break;
     default:
         throw "[BUG] MINION dump: bad MValue type";

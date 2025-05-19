@@ -3,6 +3,7 @@
 
 #include <map>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 /* The parser, Minion::read returns a single minion_value. If there is an
@@ -93,6 +94,16 @@ class DumpBuffer
 
 public:
     const char* dump(MValue& data, int pretty = -1);
+};
+
+class FreeMinion
+{
+    std::unordered_set<void*> fset;
+
+    void delete_mvalue(MValue& m);
+
+public:
+    void free(MValue& m);
 };
 
 } // namespace minion

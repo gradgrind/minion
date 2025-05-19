@@ -72,19 +72,29 @@ int main()
 
     std::string indata{f};
 
-    struct timespec start, end;
+    struct timespec start, end, xtra;
 
     InputBuffer miniondata;
+    FreeMinion freer;
 
     for (int count = 0; count < 10; ++count) {
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
-        miniondata.read(indata);
+        auto m = miniondata.read(indata);
 
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
+
+        freer.free(m);
+
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current time
+
         double elapsed = end.tv_sec - start.tv_sec;
         elapsed += (end.tv_nsec - start.tv_nsec) / 1000.0;
         printf("%0.2f microseconds elapsed\n", elapsed);
+
+        elapsed = xtra.tv_sec - end.tv_sec;
+        elapsed += (xtra.tv_nsec - end.tv_nsec) / 1000.0;
+        printf("%0.2f microseconds freeing\n", elapsed);
     }
 
     try {

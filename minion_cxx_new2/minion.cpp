@@ -28,11 +28,20 @@ typedef enum {
  */
 
 /* *** Data sharing ***
- * To reduce allocations and deallocations the actual data is referenced
- * by pointers, the data-owning pointers being kept in a stack by the
- * Minion instance. The data can then be shared by means of its address.
- * 
- * *** Macros ***
+ * To reduce allocations and deallocations the actual data is stored on
+ * the heap and referenced by non-smart pointers. The data can then be
+ * passed around, and even shared (in the case of macro substitutions)
+ * without incurring extra allocations.
+ * When the data is no longer needed it must be released. This is handled
+ * by the FreeMinion class, which runs through all the allocated nodes
+ * recursively. For this to work, all heap-allocated items which are not
+ * deleted separately (e.g. by the normal C++ mechanisms) must end up
+ * in the value tree, where they can be reached by the freer.
+ * To avoid double freeing of shared nodes (which can arise when macros
+ * are used), the freer keeps track of nodes it has already deleted.
+ */
+
+/* *** Macros ***
  * Macros use the shared-data feature to avoid having to copy their data.
  * Immediately after definition they are stored as normal MinionValues in
  * the data stack, and their addresses are also stored in some sort of map
@@ -40,31 +49,43 @@ typedef enum {
  * to a macro is found, its MinionValue address can be got from the map.
  */
 
-void delete_mvalue(
+//TODO: When parsing, keep track of non-used macros so that these can
+// be freed .. and maybe flagged as errors?
+
+void FreeMinion::free(
     MValue& m)
 {
-    //printf("Delete MValue: %d\n", type);
+    fset.clear();
+    delete_mvalue(m);
+    fset.clear();
+}
+
+void FreeMinion::delete_mvalue(
+    MValue& m)
+{
+    if (fset.contains(m.minion_item))
+        return;
+    fset.emplace(m.minion_item);
     switch (m.type) {
     case T_String:
-        //printf("Delete string: %lu\n", m.minion_item);
         delete reinterpret_cast<MString*>(m.minion_item);
         break;
-    case T_Array:
-        //printf("Delete list: %lu\n", m.minion_item);
-        delete reinterpret_cast<MList*>(m.minion_item);
-        break;
+    case T_Array: {
+        auto ml = reinterpret_cast<MList*>(m.minion_item);
+        for (auto& v : *ml) {
+            delete_mvalue(v);
+        }
+        delete ml;
+    } break;
     case T_PairArray:
-        //printf("Delete map: %lu\n", m.minion_item);
-        delete reinterpret_cast<MMap*>(m.minion_item);
+        auto mm = reinterpret_cast<MMap*>(m.minion_item);
+        for (auto& mp : *mm) {
+            delete_mvalue(mp.value);
+        }
+        delete mm;
         break;
     }
 }
-
-/* The "get_" family of functions reads the corresponding item from the
- * input. If the result is a minion item, that will be placed on the
- * remember stack. The "get_item" function reads the next item of any
- * kind, returning its type.
- */
 
 // Represent number as a string with hexadecimal digits, at least minwidth.
 std::string to_hex(
@@ -153,9 +174,8 @@ void InputBuffer::error(
  * associated data.
  * 
  * Strings (and macro names) are read into a buffer, which grows if it is
- * too small. Compound items are constructed by reading their components
- * onto a stack, remembered_items.
-*/
+ * too small. Compound items are constructed while being read.
+ */
 int InputBuffer::get_item(
     MValue& value_buffer)
 {
@@ -488,8 +508,10 @@ void InputBuffer::get_map(
             // expect value
             if (mtype == T_Macro) {
                 try {
-                    //TODO? This is duplicating the reference to the
-                    // macro value. If this is a problem for freeing,
+                    // This is duplicating the reference to the
+                    // macro value. The FreeMinion deallocator can handle
+                    // this by keeping track of deleted nodes.
+                    // If a different deallocator should be used,
                     // a deep copy might be better.
                     value_buffer = macros.at(ch_buffer);
                     mtype = value_buffer.type;
@@ -614,8 +636,8 @@ MValue InputBuffer::read(
         }
         if (mtype < T_Real_End) { // TODO: Is 0 possible?
             // found document item
-            //TODO:  Handle T_String
-
+            if (mtype == T_String)
+                value_buffer = {T_String, new MString(std::move(ch_buffer))};
             break;
         }
         // Invalid item
@@ -791,24 +813,3 @@ const char* DumpBuffer::dump(
 }
 
 } // End of namespace minion
-
-/* Use of initializer_list:
-struct pa{char* k; int v;};
-void myFunction(initializer_list<pa> myList)
-{
-
-    // Print the size (length) of myList
-    cout << "Size of myList: " << myList.size();
-    cout << "\n";
-
-    // Print elements of myList
-    cout << "Elements of myList: ";
-
-    // iterate to all the values of myList
-    for (const auto& value : myList) {
-
-        // Print value at each iteration
-        cout << value.k << " ";
-    }
-}
-*/

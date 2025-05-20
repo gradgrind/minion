@@ -6,35 +6,6 @@
 
 using namespace minion;
 
-struct Value
-{
-    short type;
-    short flags;
-    int size;
-    union {
-        char* s;
-        Value* l;
-        int* m;
-    };
-
-    /*
-    Value()
-        : type{0}
-        , flags{0}
-        , size{0}
-        , s{nullptr}
-    {}
-    */
-};
-
-struct S
-{
-    std::string name;
-    int one;
-    int two;
-
-    ~S() { printf("-- deleting %d\n", one); }
-};
 
 int main()
 {
@@ -47,8 +18,7 @@ int main()
 
     struct timespec start, end, xtra;
 
-    Minion miniondata;
-    MinionValue* parsed;
+    InputBuffer miniondata;
 
     for (int count = 0; count < 10; ++count) {
         for (const auto& fp : fplist) {
@@ -61,13 +31,13 @@ int main()
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
-            parsed = miniondata.read(f);
+            auto m = miniondata.read(indata);
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
 
-            miniondata.clear_data();
+            delete_mvalue(m);
 
-            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current time
 
             double elapsed = end.tv_sec - start.tv_sec;
             elapsed += (end.tv_nsec - start.tv_nsec) / 1000.0;
@@ -81,10 +51,10 @@ int main()
     }
 
     try {
-        parsed = miniondata.read(indata);
+        auto m = miniondata.read(indata);
 
-        //TODO++
-        const char* result = miniondata.dump(parsed, 2);
+        DumpBuffer dump_buffer;
+        const char* result = dump_buffer.dump(m, 2);
         if (result)
             printf("\n -->\n%s\n", result);
         else

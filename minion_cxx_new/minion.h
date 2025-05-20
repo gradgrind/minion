@@ -97,6 +97,7 @@ class Minion
 
 public:
     MinionValue* read(std::string_view input);
+    void clear_data() { data.clear(); }
     const char* dump(MinionValue* source, int pretty);
 
     /*?

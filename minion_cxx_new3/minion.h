@@ -3,7 +3,6 @@
 
 #include <map>
 #include <stdexcept>
-#include <unordered_set>
 #include <vector>
 
 /* The parser, Minion::read returns a single minion_value. If there is an
@@ -47,15 +46,49 @@ struct MPair
 
 using MMap = std::vector<MPair>;
 
+void delete_mvalue(MValue& m);
+
+class MacroMap
+{
+    std::map<std::string, MValue> macros;
+
+public:
+    void clear()
+    {
+        for (auto& mp : macros) {
+            delete_mvalue(mp.second);
+        }
+        macros.clear();
+    }
+
+    bool has(
+        std::string& key)
+    {
+        return macros.contains(key);
+    }
+
+    MValue get(
+        std::string& key)
+    {
+        return macros.at(key);
+    }
+
+    void add(
+        std::string& key, MValue value)
+    {
+        macros.emplace(key, value);
+    }
+};
+
 class InputBuffer
 {
-    //MValue data;
     std::string_view input;
     size_t ch_index;
     size_t line_index;
     size_t ch_linestart;
     std::string ch_buffer; // for reading strings
-    std::map<std::string, MValue> macros;
+
+    MacroMap macro_map;
 
     char read_ch(bool instring);
     void unread_ch();
@@ -96,16 +129,6 @@ class DumpBuffer
 
 public:
     const char* dump(MValue& data, int pretty = -1);
-};
-
-class FreeMinion
-{
-    std::unordered_set<void*> fset;
-
-    void delete_mvalue(MValue& m);
-
-public:
-    void free(MValue& m);
 };
 
 } // namespace minion

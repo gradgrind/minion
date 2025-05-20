@@ -81,20 +81,9 @@ MValue MValue::copy()
     }
 }
 
-void FreeMinion::free(
+void delete_mvalue(
     MValue& m)
 {
-    fset.clear();
-    delete_mvalue(m);
-    fset.clear();
-}
-
-void FreeMinion::delete_mvalue(
-    MValue& m)
-{
-    if (fset.contains(m.minion_item))
-        return;
-    fset.emplace(m.minion_item);
     switch (m.type) {
     case T_String:
         delete reinterpret_cast<MString*>(m.minion_item);
@@ -484,7 +473,7 @@ void InputBuffer::get_list(
             break;
         if (mtype == T_Macro) {
             try {
-                value_buffer = macros.at(ch_buffer);
+                value_buffer = macro_map.get(ch_buffer).copy();
                 mtype = value_buffer.type;
                 continue;
             } catch (const std::out_of_range& e) {
@@ -542,7 +531,7 @@ void InputBuffer::get_map(
                     // this by keeping track of deleted nodes.
                     // If a different deallocator should be used,
                     // a deep copy might be better.
-                    value_buffer = macros.at(ch_buffer);
+                    value_buffer = macro_map.get(ch_buffer).copy();
                     mtype = value_buffer.type;
                 } catch (const std::out_of_range& e) {
                     error(std::string("Expecting map value, undefined macro name at position ")
@@ -623,7 +612,7 @@ MValue InputBuffer::read(
     ch_index = 0;
     line_index = 0;
     ch_linestart = 0;
-    macros.clear();
+    macro_map.clear();
     MValue value_buffer;
 
     while (true) {
@@ -631,7 +620,7 @@ MValue InputBuffer::read(
         short mtype = get_item(value_buffer);
         if (mtype == T_Macro) {
             // Check for duplicate
-            if (macros.contains(ch_buffer)) {
+            if (macro_map.has(ch_buffer)) {
                 error(std::string("Position ")
                           .append(pos(current_pos))
                           .append(": macro name already defined"));
@@ -651,7 +640,7 @@ MValue InputBuffer::read(
                 // Add the macro
                 if (mtype == T_String)
                     value_buffer = {T_String, new MString(ch_buffer)};
-                macros.emplace(mkey, value_buffer);
+                macro_map.add(mkey, value_buffer);
                 // expect ','
                 mtype = get_item(value_buffer);
                 if (mtype == T_Token_Comma) {
@@ -687,6 +676,7 @@ MValue InputBuffer::read(
                   .append(pos(current_pos))
                   .append(": unexpected item after document item"));
     }
+    macro_map.clear();
     return value_buffer;
 }
 

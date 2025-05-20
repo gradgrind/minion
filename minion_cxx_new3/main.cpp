@@ -19,7 +19,6 @@ int main()
     struct timespec start, end, xtra;
 
     InputBuffer miniondata;
-    FreeMinion freer;
 
     for (int count = 0; count < 10; ++count) {
         for (const auto& fp : fplist) {
@@ -36,7 +35,7 @@ int main()
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
 
-            freer.free(m);
+            delete_mvalue(m);
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current time
 

@@ -38,72 +38,50 @@ struct S
 
 int main()
 {
-    /*
-    std::vector<std::unique_ptr<S>> vec;
-    for (int i = 0; i < 4; ++i) {
-        vec.emplace_back(std::make_unique<S>("A", i, i * 5));
-        //vec.emplace_back(new S{"A", i, i * 5});
-    }
-    S* w = vec.at(1).get();
-    printf("vec[1]: %d %d\n", w->one, w->two);
-    vec.resize(2);
-    printf("Exiting %zu\n", vec.capacity());
-    exit(0);
+    auto fplist = {"../data/test1.minion",
+                   "../data/test2.minion",
+                   "../data/test3.minion",
+                   "../data/test4.minion"};
 
-    Value v;
-    printf("?? %d %d %d %lu\n", v.type, v.flags, v.size, v.m);
-    printf("$ %lu\n", sizeof(v));
+    std::string indata;
 
-    auto v1 = v;
-    v1.type = 1;
-    auto v2{v};
-    v2.flags = 2;
-    Value v3(v);
-    v3.size = 3;
-    Value v4{4, 4, 4, {nullptr}};
-    printf("?? %d %d %d %lu\n", v1.type, v1.flags, v1.size, v1.m);
-    printf("?? %d %d %d %lu\n", v2.type, v2.flags, v2.size, v2.m);
-    printf("?? %d %d %d %lu\n", v3.type, v3.flags, v3.size, v3.m);
-    printf("?? %d %d %d %lu\n", v4.type, v4.flags, v4.size, v4.m);
-
-    MinionValue m0;
-    printf("m0: %zu\n", m0.index());
-    std::string A{"A"};
-    std::string B{"B"};
-    auto m1 = MinionValue{A};
-    auto m2 = MinionValue{B};
-    auto ml = MinionValue{MinionList({&m1, &m2})};
-    printf("AB: %lu %lu\n", sizeof(m1), sizeof(ml));
-    auto mlx = std::get_if<MinionList>(&ml)->at(0);
-    printf("A: %s\n", std::get_if<std::string>(mlx)->c_str());
-    exit(0);
-    */
-
-    const char* fp = "../data/test4.minion";
-    const char* f = read_file(fp);
-    if (!f) {
-        printf("File not found: %s\n", fp);
-		exit(1);
-	}
-
-    struct timespec start, end;
+    struct timespec start, end, xtra;
 
     Minion miniondata;
     MinionValue* parsed;
 
-    for (int count = 0; count < 10; ++count) {
-        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
+    for (int count = 0; count < 20000; ++count) {
+        for (const auto& fp : fplist) {
+            const char* f = read_file(fp);
+            if (!f) {
+                printf("File not found: %s\n", fp);
+                exit(1);
+            }
+            indata = f;
 
-        parsed = miniondata.read(f);
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
-        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
-        double elapsed = end.tv_sec - start.tv_sec;
-        elapsed += (end.tv_nsec - start.tv_nsec) / 1000.0;
-        printf("%0.2f microseconds elapsed\n", elapsed);
+            parsed = miniondata.read(f);
+
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
+
+            miniondata.clear_data();
+
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current
+
+            double elapsed = end.tv_sec - start.tv_sec;
+            elapsed += (end.tv_nsec - start.tv_nsec) / 1000.0;
+            printf("%0.2f microseconds elapsed\n", elapsed);
+
+            elapsed = xtra.tv_sec - end.tv_sec;
+            elapsed += (xtra.tv_nsec - end.tv_nsec) / 1000.0;
+            printf("%0.2f microseconds freeing\n", elapsed);
+        }
+        printf("  - - - - -\n");
     }
 
     try {
-        parsed = miniondata.read(f);
+        parsed = miniondata.read(indata);
 
         //TODO++
         const char* result = miniondata.dump(parsed, 2);

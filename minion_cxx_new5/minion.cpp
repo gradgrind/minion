@@ -549,7 +549,7 @@ void InputBuffer::get_map(
             if (mtype == T_String)
                 value_buffer = {.type = T_String, .minion_item = new MString(ch_buffer)};
             //printf("$$ mmap.add: %d\n", value_buffer.type);
-            mmap->emplace_back(s, value_buffer);
+            mmap->emplace_back(MPair{{s}, value_buffer});
             current_pos = here();
             mtype = get_item(value_buffer);
             if (mtype == T_Token_MapEnd) {
@@ -835,6 +835,60 @@ const char* DumpBuffer::dump(
     buffer.clear();
     dump_value(data);
     return buffer.c_str();
+}
+
+// *** Special MValue "constructors" ***
+
+// Build a new minion string item from the given string view.
+MValue new_string(std::string_view s)
+{
+    return {.type = 1, .minion_item = new MString(std::string{s})};
+}
+
+// Build a new minion list item from the given entries, which are of type
+// MValue.
+MValue new_list(std::initializer_list<MValue> items)
+{
+    auto mlist = new MList;
+    for (const auto& item : items) {
+        mlist->emplace_back(item);
+    }
+    return {.type=T_Array, .minion_item=mlist};
+}
+
+// Build a new minion map from the given entries, which are string/value
+// pairs.
+MValue new_map(std::initializer_list<MPair> items)
+{
+    auto mmap = new MMap;
+    for (const auto& item : items) {
+        mmap->emplace_back(item);
+    }
+    return {.type=T_PairArray, .minion_item=mmap};
+}
+
+MString* m_string(
+    MValue m)
+{
+    if (m.type == T_String)
+        return reinterpret_cast<MString*>(m.minion_item);
+    return nullptr;
+}
+
+MList* m_list(
+    MValue m)
+{
+    if (m.type == T_Array)
+        return reinterpret_cast<MList*>(m.minion_item);
+    return nullptr;
+}
+
+MMap* m_map(
+    MValue m)
+{
+    if (m.type == T_PairArray)
+        return reinterpret_cast<MMap*>(m.minion_item);
+    return nullptr;
 }
 
 } // End of namespace minion

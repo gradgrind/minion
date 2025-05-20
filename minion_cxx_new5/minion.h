@@ -36,8 +36,14 @@ struct MValue
     MValue copy(); // deep copy function
 };
 
-using MString = std::string;
-using MList = std::vector<MValue>;
+//TODO: Use real classes for MString, MList, MMap? So they can have
+// their own methods ...
+
+class MString : public std::string
+{};
+
+class MList : public std::vector<MValue>
+{};
 
 struct MPair
 {
@@ -45,9 +51,20 @@ struct MPair
     MValue value;
 };
 
-using MMap = std::vector<MPair>;
+class MMap : public std::vector<MPair>
+{};
 
 void delete_mvalue(MValue& m);
+
+// Special MValue "constructors"
+MValue new_string(std::string_view s);
+MValue new_list(std::initializer_list<MValue> items);
+MValue new_map(std::initializer_list<MPair> items);
+
+// Special MValue "methods"
+MString* m_string(MValue m);
+MList* m_list(MValue m);
+MMap* m_map(MValue m);
 
 class MacroMap
 {

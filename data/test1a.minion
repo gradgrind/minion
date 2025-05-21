@@ -1,0 +1,8 @@
+[ # The document object
+  {
+    "First item": [1, "ONE"],
+    "Second item": [2, "TWO"]
+  },
+
+  "More stuff ..."
+]

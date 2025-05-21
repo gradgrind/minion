@@ -1,0 +1,13 @@
+#+++ __TITLE__   : Allgemeine Konfiguration
+#+++ __MINION__  : 5.0
+#+++ __MODIFIED__: 2022-12-24
+#+++###########################################################
+#+++# Diese Kopfzeilen sollten nicht geändert werden, das Datum
+#+++# wird beim Speichern (in WZ) automatisch aktualisiert.
+#--------------------------------------------------------------
+{
+PUPILS_FIELDS: [
+# Diese werden im Programm verwendet:
+    [LEVEL,          Bewertungsmaßstab,   CHOICE, ["", Gym, RS, HS],   ""],
+MORE :
+]}

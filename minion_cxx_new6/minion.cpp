@@ -2,6 +2,41 @@
 
 namespace minion {
 
+//TODO--
+MValue* base_ref = 0;
+
+void prnode(
+    const MValue& m)
+{
+    if (m.type == 0) {
+        printf("^^^ 0\n");
+        return;
+    }
+    if (m.type == 1) {
+        printf("^^^ 1: %s\n", reinterpret_cast<MString*>(m.minion_item)->c_str());
+        return;
+    }
+    if (m.type == 2) {
+        printf("^^^ 2:\n");
+        for (const auto& n : *reinterpret_cast<MList*>(m.minion_item)) {
+            prnode(n);
+        }
+        printf("--- 2:\n");
+        return;
+    }
+    if (m.type == 3) {
+        printf("^^^ 3:\n");
+        for (const auto& n : *reinterpret_cast<MMap*>(m.minion_item)) {
+            printf(" -- %s:\n", n.first.c_str());
+            prnode(n.second);
+        }
+        printf("--- 3:\n");
+        return;
+    }
+    throw "[BUG} prnode";
+}
+//--
+
 typedef enum {
     // The "real" types must correspond to their indexes in the
     // MinionValue variant.
@@ -20,53 +55,6 @@ typedef enum {
     T_Token_Comma,
     T_Token_Colon,
 } minion_type;
-
-Diagnostics diagnostics;
-
-MString* Diagnostics::new_string(
-    std::string_view s)
-{
-    auto p = new MString(std::string(s));
-    allocs.emplace(p, false);
-    return p;
-}
-
-MList* Diagnostics::new_list()
-{
-    auto p = new MList();
-    allocs.emplace(p, false);
-    return p;
-}
-
-MMap* Diagnostics::new_map()
-{
-    auto p = new MMap();
-    allocs.emplace(p, false);
-    return p;
-}
-
-void Diagnostics::free(
-    void* p)
-{
-    if (allocs.contains(p)) {
-        if (allocs.at(p)) {
-            throw "[BUG] double free";
-        }
-        allocs.at(p) = true;
-    } else {
-        throw "[BUG] unknown alloc";
-    }
-}
-
-void Diagnostics::analyse()
-{
-    for (const auto& pb : allocs) {
-        if (!pb.second) {
-            printf("$$$$$ Unfreed: %lu\n", pb.first);
-        }
-    }
-    allocs.clear();
-}
 
 // Test whether a minion_type corresponds to a valid MValue.
 // If there is no type, throw an exception (it's a bug).
@@ -161,10 +149,6 @@ void MValue::free()
 {
     if (not_owner)
         return;
-
-    if (minion_item)
-        diagnostics.free(minion_item);
-
     switch (type) {
     case T_String:
         delete reinterpret_cast<MString*>(minion_item);
@@ -532,7 +516,10 @@ void InputBuffer::get_list(
     MValue& mvalue)
 {
     //auto mlist = new MList;
-    auto mlist = diagnostics.new_list();
+    auto mlist = new MList();
+
+    printf("§l+\n");
+    prnode(*base_ref);
 
     mvalue = {T_Array, mlist};
     position current_pos = here();
@@ -573,6 +560,8 @@ void InputBuffer::get_list(
         }
         error(std::string("Expecting list item or ']' at position ").append(pos(current_pos)));
     }
+    printf("§l-\n");
+    prnode(*base_ref);
 }
 
 MValue* map_search(
@@ -589,9 +578,13 @@ void InputBuffer::get_map(
     MValue& mvalue)
 {
     //auto mmap = new MMap;
-    auto mmap = diagnostics.new_map();
+    auto mmap = new MMap();
 
     mvalue = {T_PairArray, mmap};
+
+    printf("§m+\n");
+    prnode(*base_ref);
+
     position current_pos = here();
     MValue m;
     auto mtype = get_item(m);
@@ -660,6 +653,8 @@ void InputBuffer::get_map(
         }
         error(std::string("Reading map, expecting a key at position ").append(pos(current_pos)));
     }
+    printf("§m-\n");
+    prnode(*base_ref);
 }
 
 // *** Serializing MINION ***
@@ -787,6 +782,9 @@ const char* InputBuffer::read(
         //TODO ... handle this!
         printf("!!! error: %s\n", e.what());
         fflush(stdout);
+
+        printf("§e: %d %lu\n", base_ref->type, base_ref->minion_item);
+
         data.free();
         macro_map.clear();
         return e.what(); //TODO: Might this be volatile?!
@@ -953,7 +951,7 @@ const char* DumpBuffer::dump(
 MValue::MValue(
     std::string_view s)
     : type{T_String} //, minion_item{new MString(std::string{s})}
-    , minion_item{diagnostics.new_string(std::string{s})}
+    , minion_item{new MString(std::string{s})}
 {}
 
 // Build a new minion list item from the given entries, which are of type
@@ -961,7 +959,7 @@ MValue::MValue(
 MValue::MValue(
     std::initializer_list<MValue> items)
     : type{T_Array} //, minion_item{new MList}
-    , minion_item{diagnostics.new_list()}
+    , minion_item{new MList()}
 {
     for (const auto& item : items) {
         reinterpret_cast<MList*>(minion_item)->emplace_back(item);
@@ -973,7 +971,7 @@ MValue::MValue(
 MValue::MValue(
     std::initializer_list<MPair> items)
     : type{T_PairArray} //, minion_item{new MMap}
-    , minion_item{diagnostics.new_map()}
+    , minion_item{new MMap()}
 {
     for (const auto& item : items) {
         reinterpret_cast<MMap*>(minion_item)->emplace_back(item);

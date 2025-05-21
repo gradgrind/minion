@@ -3,7 +3,6 @@
 
 #include <map>
 #include <stdexcept>
-#include <unordered_map>
 #include <vector>
 
 /* The parser, Minion::read returns a single minion_value. If there is an
@@ -56,7 +55,7 @@ struct MValue
     //protected:
     void free();
 
-protected:
+    //TODO++ protected:
     int type{0};
     bool not_owner{false};
     void* minion_item{nullptr};
@@ -72,6 +71,10 @@ protected:
 
     void mcopy(MValue& m); // used by copy method
 };
+
+//TODO--
+extern MValue* base_ref;
+//--
 
 struct MinionValue : public MValue
 {
@@ -94,20 +97,6 @@ class MList : public std::vector<MValue>
 
 class MMap : public std::vector<MPair>
 {};
-
-struct Diagnostics
-{
-    std::unordered_map<void*, bool> allocs;
-
-    MString* new_string(std::string_view s);
-    MList* new_list();
-    MMap* new_map();
-
-    void free(void* p);
-    void analyse();
-};
-
-extern Diagnostics diagnostics;
 
 class InputBuffer
 {

@@ -9,5 +9,5 @@
 PUPILS_FIELDS: [
 # Diese werden im Programm verwendet:
     [LEVEL,          Bewertungsmaßstab,   CHOICE, ["", Gym, RS, HS],   ""],
-MORE
+MORE :
 ]}

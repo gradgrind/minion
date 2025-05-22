@@ -46,16 +46,18 @@ struct MValue
     MValue(std::initializer_list<MValue> items);
     MValue(std::initializer_list<MPair> items);
 
+    bool is_null();
+
     MString* m_string();
     MList* m_list();
     MMap* m_map();
 
     void copy(MinionValue& m); // deep copy function
 
-    //protected:
+protected:
     void free();
 
-    //TODO++ protected:
+    //protected:
     int type{0};
     bool not_owner{false};
     void* minion_item{nullptr};
@@ -71,10 +73,6 @@ struct MValue
 
     void mcopy(MValue& m); // used by copy method
 };
-
-//TODO--
-extern MValue* base_ref;
-//--
 
 struct MinionValue : public MValue
 {
@@ -182,7 +180,7 @@ public:
     //void get_map_value(MValue& mvalue);
 
 public:
-    const char* read(MinionValue& data, std::string_view s);
+    std::string read(MinionValue& data, std::string_view s);
 };
 
 class DumpBuffer

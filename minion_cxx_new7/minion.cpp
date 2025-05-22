@@ -682,27 +682,25 @@ MinionValue Minion::new_map(std::initializer_list<map_item> items)
 }
 */
 
-const char* InputBuffer::read(
+std::string InputBuffer::read(
     MinionValue& data, std::string_view input_string)
 {
+    // Prepare input buffer
     input = input_string;
     ch_index = 0;
     line_index = 0;
     ch_linestart = 0;
 
-    data.free(); //TODO--?
+    // Clear result data, just to be sure ...
+    data.free();
     macro_map.clear();
 
     try {
         get_item(data);
     } catch (MinionError& e) {
-        //TODO ... handle this!
-        printf("!!! error: %s\n", e.what());
-        fflush(stdout);
-
         data.free();
         macro_map.clear();
-        return e.what(); //TODO: Might this be volatile?!
+        return e.what();
     }
 
     /*
@@ -714,7 +712,7 @@ const char* InputBuffer::read(
     */
 
     macro_map.clear();
-    return "TODO: Result (error message, if any)";
+    return {};
 }
 
 void DumpBuffer::dump_string(
@@ -899,6 +897,11 @@ MValue::MValue(
     for (const auto& item : items) {
         reinterpret_cast<MMap*>(minion_item)->emplace_back(new MPair{item});
     }
+}
+
+bool MValue::is_null()
+{
+    return type == T_NoType;
 }
 
 MString* MValue::m_string()

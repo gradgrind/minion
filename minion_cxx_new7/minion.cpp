@@ -1,41 +1,7 @@
 #include "minion.h"
+#include <map>
 
 namespace minion {
-
-//TODO--
-MValue* base_ref = 0;
-
-void prnode(
-    const MValue& m)
-{
-    if (m.type == 0) {
-        printf("^^^ 0\n");
-        return;
-    }
-    if (m.type == 1) {
-        printf("^^^ 1: %s\n", reinterpret_cast<MString*>(m.minion_item)->c_str());
-        return;
-    }
-    if (m.type == 2) {
-        printf("^^^ 2:\n");
-        for (const auto& n : *reinterpret_cast<MList*>(m.minion_item)) {
-            prnode(n);
-        }
-        printf("--- 2:\n");
-        return;
-    }
-    if (m.type == 3) {
-        printf("^^^ 3:\n");
-        for (const auto& n : *reinterpret_cast<MMap*>(m.minion_item)) {
-            printf(" -- %s:\n", n.first.c_str());
-            prnode(n.second);
-        }
-        printf("--- 3:\n");
-        return;
-    }
-    throw "[BUG} prnode";
-}
-//--
 
 enum minion_type {
     T_NoType = 0,
@@ -49,26 +15,15 @@ enum minion_type {
 
 enum expect_type { Expect_Value = 0, Expect_Comma, Expect_Colon, Expect_End };
 
-const std::map<int, std::string> seek_message = {{T_NoType, "top-level value"},
-                                                 {T_String, "string"},
-                                                 {T_List, "list entry"},
-                                                 {T_Map, "map entry key"},
-                                                 {T_Pair, "map entry value"}};
-
-// Test whether a minion_type corresponds to a valid MValue.
-// If there is no type, throw an exception (it's a bug).
-bool real_type(
-    int mtype)
-{
-    if (mtype < T_Real_End) {
-        if (mtype == T_NoType)
-            throw "[BUG] Encountered null MValue";
-        return true;
-    }
-    return false;
-}
+const inline std::map<int, std::string> seek_message = {{T_NoType, "top-level value"},
+                                                        {T_String, "string"},
+                                                        {T_List, "list entry"},
+                                                        {T_Map, "map entry key"},
+                                                        {T_Pair, "map entry value"},
+                                                        {T_Macro, "macro value definition"}};
 
 /* *** Memory management ***
+ * TODO ... not up to date ...
  * The Minion class manages memory allocation for MINION items and the
  * buffers needed for parsing and building them. A MinionValue is thus
  * dependent on the Minion instance used to build it.
@@ -119,7 +74,7 @@ void MValue::mcopy(
         auto mlist = new MList;
         m = {T_List, mlist};
         auto ml = reinterpret_cast<MList*>(minion_item);
-        for (const auto& v : *ml) {
+        for (auto& v : *ml) {
             mlist->emplace_back(MValue{});
             MValue& mref = (*mlist)[mlist->size() - 1];
             v.mcopy(mref);
@@ -130,13 +85,10 @@ void MValue::mcopy(
         auto mmap = new MMap;
         m = {T_Map, mmap};
         auto mm = reinterpret_cast<MMap*>(minion_item);
-        for (const auto& mp : *mm) {
-            auto mpair = new MPair(mp->first, );
-
-            mmap->emplace_back(mp.first, MValue{});
-            MPair& mpref = (*mmap)[mmap->size() - 1];
-            MValue& mref = mpref.second;
-            mp.second.mcopy(mref);
+        for (auto& mp : *mm) {
+            auto mpair = new MPair(mp->first, {});
+            mmap->emplace_back(mpair);
+            mp->second.mcopy(mpair->second);
         }
         break;
     };
@@ -367,6 +319,29 @@ void InputBuffer::get_string(
     }
 }
 
+MValue InputBuffer::get_macro(
+    std::string& s)
+{
+    auto m = macro_map.get(s);
+    if (m.type == T_NoType) {
+        error(std::string("Unknown macro name: ")
+                  .append(ch_buffer)
+                  .append(" ... current position ")
+                  .append(pos(here())));
+    }
+    return m;
+}
+
+MValue* map_search(
+    MMap* mmap, std::string_view key)
+{
+    for (auto& mp : *mmap) {
+        if (mp->first == key)
+            return &mp->second;
+    }
+    return nullptr;
+}
+
 /* Read the next "item" from the input.
  * Return the minion_type of the item read, which may be a string, a
  * macro name, an "array" (list) or an "object" (map). If the input is
@@ -382,6 +357,7 @@ void InputBuffer::get_item(
 {
     char ch;
     while (true) {
+        //position current_pos = here();
         switch (ch = read_ch(false)) {
             // Act according to the next input character.
 
@@ -402,40 +378,70 @@ void InputBuffer::get_item(
                 continue;
             }
             error(std::string("Unexpected ':' while reading ").append(seek_message.at(mvalue.type)));
+            break; // unreachable
 
         case ']':
             if (mvalue.type == T_List && (expect == Expect_Value || expect == Expect_Comma)) {
                 return;
             }
             error(std::string("Unexpected ']' while reading ").append(seek_message.at(mvalue.type)));
+            break; // unreachable
 
         case '}':
             if (mvalue.type == T_Map && (expect == Expect_Value || expect == Expect_Comma)) {
                 return;
             }
             error(std::string("Unexpected ']' while reading ").append(seek_message.at(mvalue.type)));
+            break; // unreachable
 
         case ',':
             if (expect == Expect_Comma) {
                 expect = Expect_Value;
                 continue;
             }
+            error(std::string("Unexpected ',' while reading ").append(seek_message.at(mvalue.type)));
+            break; // unreachable
 
         case '&': // start of macro name
-            // valid at top level or as value in list or map
-            //TODO
+            // valid at top level, as macro value, or as value in
+            // lists or maps
             if (expect == Expect_Value) {
-                if (mvalue.type == T_NoType) {
-                    // macro definition
+                switch (mvalue.type) {
+                case T_NoType: // top-level, macro key definition
                     get_bare_string(ch);
-                    //TODO: check unique
+                    // check that the key is unique
+                    if (macro_map.has(ch_buffer)) {
+                        error(std::string("Macro key has already been defined: ")
+                                  .append(ch_buffer)
+                                  .append(" ... current position ")
+                                  .append(pos(here())));
+                    }
+                    macro_map.add(ch_buffer, MValue{T_Macro, nullptr});
+                    get_item(macro_map.first_value(), Expect_Colon);
+                    expect = Expect_Comma;
+                    continue;
 
-                    //TODO: maybe reimplement the map so that the
-                    // node can be retained here?
-                    MValue m = {T_Macro, new std::string(ch_buffer)};
+                case T_Macro: // top-level, macro value definition
+                    get_bare_string(ch);
+                    mvalue = get_macro(ch_buffer);
+                    return;
+
+                case T_List: // list value
+                    get_bare_string(ch);
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(get_macro(ch_buffer));
+                    expect = Expect_Comma;
+                    continue;
+
+                case T_Pair: // map value                {
+                    get_bare_string(ch);
+                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(
+                        get_macro(ch_buffer));
+                    return;
                 }
-                //expect = Expect_Colon;
             }
+            error(std::string("Unexpected macro name at position ").append(pos(here())));
+            break; // unreachable
+
         case '[':
             if (expect == Expect_Value) {
                 switch (mvalue.type) {
@@ -445,6 +451,7 @@ void InputBuffer::get_item(
                     // No further input expected
                     expect = Expect_End;
                     continue;
+
                 case T_List: // list value
                 {
                     MValue m = {T_List, new MList()};
@@ -453,6 +460,7 @@ void InputBuffer::get_item(
                     expect = Expect_Comma;
                     continue;
                 }
+
                 case T_Pair: // map value                {
                 {
                     MValue m = {T_List, new MList()};
@@ -460,9 +468,17 @@ void InputBuffer::get_item(
                     get_item(m);
                     return;
                 }
+
+                case T_Macro: // top-level, macro value definition
+                {
+                    mvalue = {T_List, new MList()};
+                    get_item(mvalue);
+                    return;
+                }
                 }
             }
             error(std::string("Unexpected start of list ('[')"));
+            break; // unreachable
 
         case '{':
             if (expect == Expect_Value) {
@@ -488,9 +504,17 @@ void InputBuffer::get_item(
                     get_item(m);
                     return;
                 }
+
+                case T_Macro: // top-level, macro value definition
+                {
+                    mvalue = {T_Map, new MMap()};
+                    get_item(mvalue);
+                    return;
+                }
                 }
             }
             error(std::string("Unexpected start of map ('{')"));
+            break; // unreachable
 
         case '#': // start comment
             ch = read_ch(false);
@@ -538,10 +562,16 @@ void InputBuffer::get_item(
                 case T_Map: // map-key value
                 {
                     get_string(ch);
-                    //TODO: check unique
-
+                    // check that the key is unique
+                    auto mm = reinterpret_cast<MMap*>(mvalue.minion_item);
+                    if (map_search(mm, ch_buffer)) {
+                        error(std::string("Map key has already been defined: ")
+                                  .append(ch_buffer)
+                                  .append(" ... current position ")
+                                  .append(pos(here())));
+                    }
                     auto mp = new MPair(ch_buffer, {});
-                    reinterpret_cast<MMap*>(mvalue.minion_item)->emplace_back(mp);
+                    mm->emplace_back(mp);
                     MValue m = {T_Pair, mp};
                     get_item(m, Expect_Colon);
                     expect = Expect_Comma;
@@ -556,10 +586,13 @@ void InputBuffer::get_item(
                     get_string(ch);
                     reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(ch_buffer);
                     return;
+                case T_Macro:
+                    get_string(ch);
+                    mvalue = MValue(ch_buffer);
+                    return;
                 }
             }
             error(std::string("Unexpected start of string value"));
-
         } // End of character switch
     } // End of item-seeking loop
 }
@@ -605,16 +638,6 @@ bool InputBuffer::add_unicode_to_ch_buffer(
         return false;
     }
     return true;
-}
-
-MValue* map_search(
-    MMap* mmap, std::string_view key)
-{
-    for (auto& mp : *mmap) {
-        if (mp->first == key)
-            return &mp->second;
-    }
-    return nullptr;
 }
 
 // *** Serializing MINION ***
@@ -671,79 +694,11 @@ const char* InputBuffer::read(
     macro_map.clear();
 
     try {
-        while (true) {
-            position current_pos = here();
-            short mtype = get_item(data);
-            if (mtype == T_Macro) {
-                // Check for duplicate
-                if (macro_map.has(ch_buffer)) {
-                    error(std::string("Position ")
-                              .append(pos(current_pos))
-                              .append(": macro name already defined"));
-                }
-                std::string mkey = ch_buffer;
-                current_pos = here();
-                // expect ':'
-                mtype = get_item(data);
-                if (mtype != T_Token_Colon) {
-                    error(std::string("Expecting ':' in macro definition at position ")
-                              .append(pos(current_pos)));
-                }
-                current_pos = here();
-                mtype = get_item(data);
-                // expect value
-                if (real_type(mtype)) {
-                    // Add the macro
-                    if (mtype == T_String)
-                        macro_map.add(mkey, MValue(ch_buffer));
-                    else {
-                        // Transfer the value to th macro map
-                        macro_map.add(mkey, data);
-                        data.type = T_NoType;
-                        data.minion_item = nullptr;
-                    }
-                    // expect ','
-                    mtype = get_item(data);
-                    if (mtype == T_Token_Comma) {
-                        continue;
-                    }
-                    error(std::string("After macro definition: expecting ',' at position ")
-                              .append(pos(current_pos)));
-                }
-                error(std::string("In macro definition, expecting a value at position ")
-                          .append(pos(current_pos)));
-            }
-            if (real_type(mtype)) {
-                // found document item
-                if (mtype == T_String)
-                    data = MValue(ch_buffer);
-                break;
-            }
-            // Invalid item
-            if (mtype == T_Token_End) {
-                error("Document contains no main item");
-            }
-            error(std::string("Invalid minion item at position ").append(pos(current_pos)));
-        }
-        // "Real" minion item, not macro definition, found.
-        // This should be the document content.
-
-        //TODO: unused macros may be an error?
-
-        // Check that there are no further items
-        position current_pos = here();
-        if (get_item(data) != T_Token_End) {
-            error(std::string("Position ")
-                      .append(pos(current_pos))
-                      .append(": unexpected item after document item"));
-        }
-
+        get_item(data);
     } catch (MinionError& e) {
         //TODO ... handle this!
         printf("!!! error: %s\n", e.what());
         fflush(stdout);
-
-        printf("§e: %d %lu\n", base_ref->type, base_ref->minion_item);
 
         data.free();
         macro_map.clear();
@@ -860,11 +815,11 @@ void DumpBuffer::dump_map(
             ++depth;
         for (const auto& mp : source) {
             dump_pad();
-            dump_string(mp.first);
+            dump_string(mp->first);
             add(':');
             if (depth >= 0)
                 add(' ');
-            dump_value(mp.second);
+            dump_value(mp->second);
             add(',');
         }
         depth = d;
@@ -934,7 +889,7 @@ MValue::MValue(
     , minion_item{new MMap()}
 {
     for (const auto& item : items) {
-        reinterpret_cast<MMap*>(minion_item)->emplace_back(item);
+        reinterpret_cast<MMap*>(minion_item)->emplace_back(new MPair{item});
     }
 }
 

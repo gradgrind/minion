@@ -12,9 +12,9 @@ int main()
         //"../data/test1.minion",
         //"../data/test1a.minion",
         //"../data/test2.minion",
-        "../data/test2a.minion",
+        //"../data/test2a.minion",
         //"../data/test2e.minion",
-        //"../data/test3.minion",
+        "../data/test3.minion",
         //"../data/test4.minion"
         //"../data/test4e.minion"
         //
@@ -27,9 +27,6 @@ int main()
     InputBuffer miniondata;
 
     MinionValue m;
-    //TODO--
-    base_ref = &m;
-    //--
 
     for (int count = 0; count < 1; ++count) {
         for (const auto& fp : fplist) {
@@ -42,9 +39,7 @@ int main()
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
-            //m = new MinionValue;
             miniondata.read(m, indata);
-            printf("§m0: %d %lu\n", base_ref->type, base_ref->minion_item);
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
 
@@ -66,6 +61,8 @@ int main()
     try {
         //MinionValue m;
         //miniondata.read(m, indata);
+
+        //TODO: This should be skipped if there is no data (on error)
 
         DumpBuffer dump_buffer;
         const char* result = dump_buffer.dump(m, 2);

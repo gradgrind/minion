@@ -1,7 +1,7 @@
 #ifndef MINION_H
 #define MINION_H
 
-#include <map>
+#include <forward_list>
 #include <stdexcept>
 #include <vector>
 
@@ -102,7 +102,7 @@ class InputBuffer
 {
     class MacroMap
     {
-        std::map<std::string, MValue> macros;
+        std::forward_list<MPair> macros;
 
     public:
         void clear()
@@ -116,24 +116,38 @@ class InputBuffer
         bool has(
             std::string& key)
         {
-            return macros.contains(key);
+            for (auto& mp : macros) {
+                if (mp.first == key) {
+                    return true;
+                }
+            }
+            return false;
         }
+
+        MValue& first_value() { return macros.front().second; }
 
         MValue get(
             std::string& key)
         {
-            auto m = macros.at(key);
-            if (!m.not_owner)
-                macros.at(key) = m.unowned();
-            return m;
+            for (auto& mp : macros) {
+                if (mp.first == key) {
+                    auto m = mp.second;
+                    mp.second.not_owner = true;
+                    return m;
+                }
+            }
+            return {};
         }
 
-        void add(
+        MPair& add(
             std::string& key, MValue value)
         {
-            macros.emplace(key, value);
+            macros.emplace_front(key, value);
+            return macros.front();
         }
     };
+
+    MValue get_macro(std::string& s);
 
     //MinionValue data;
 

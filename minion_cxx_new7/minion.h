@@ -142,7 +142,6 @@ class InputBuffer
     size_t line_index;
     size_t ch_linestart;
     std::string ch_buffer; // for reading strings
-    std::string state;     // to indicate current reading state
 
     MacroMap macro_map;
 
@@ -159,9 +158,7 @@ class InputBuffer
     void get_string(char ch);
     void get_bare_string(char ch);
     bool add_unicode_to_ch_buffer(int len);
-    void get_list(MValue& mvalue);
-    void get_map(MValue& mvalue);
-    void get_map_value(MValue& mvalue);
+    //void get_map_value(MValue& mvalue);
 
 public:
     const char* read(MinionValue& data, std::string_view s);

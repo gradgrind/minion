@@ -245,6 +245,7 @@ void InputBuffer::get_string(
     // +++ a delimited string (terminated by '"')
     // Escapes, introduced by '\', are possible. These are an extension
     // of the JSON escapes – see the MINION specification.
+    ch_buffer.clear();
     position start_pos = here();
     while (true) {
         ch = read_ch(true);
@@ -357,7 +358,6 @@ void InputBuffer::get_item(
 {
     char ch;
     while (true) {
-        //position current_pos = here();
         switch (ch = read_ch(false)) {
             // Act according to the next input character.
 
@@ -704,6 +704,14 @@ const char* InputBuffer::read(
         macro_map.clear();
         return e.what(); //TODO: Might this be volatile?!
     }
+
+    /*
+    DumpBuffer d;
+    for (auto& mp : macro_map.macros) {
+        printf("&: %s\n", mp.first.c_str());
+        printf("  == %s\n\n", d.dump(mp.second));
+    }
+    */
 
     macro_map.clear();
     return "TODO: Result (error message, if any)";

@@ -9,13 +9,13 @@ using namespace minion;
 int main()
 {
     auto fplist = {
-        //"../data/test1.minion",
+        "../data/test1.minion",
         //"../data/test1a.minion",
-        //"../data/test2.minion",
+        "../data/test2.minion",
         //"../data/test2a.minion",
         //"../data/test2e.minion",
         "../data/test3.minion",
-        //"../data/test4.minion"
+        "../data/test4.minion",
         //"../data/test4e.minion"
         //
     };
@@ -28,7 +28,7 @@ int main()
 
     MinionValue m;
 
-    for (int count = 0; count < 1; ++count) {
+    for (int count = 0; count < 10; ++count) {
         for (const auto& fp : fplist) {
             const char* f = read_file(fp);
             if (!f) {
@@ -43,7 +43,7 @@ int main()
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
 
-            //m.free();
+            m.free();
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current time
 
@@ -59,17 +59,16 @@ int main()
     }
 
     try {
-        //MinionValue m;
-        //miniondata.read(m, indata);
+        miniondata.read(m, indata);
 
-        //TODO: This should be skipped if there is no data (on error)
-
-        DumpBuffer dump_buffer;
-        const char* result = dump_buffer.dump(m, 2);
-        if (result)
-            printf("\n -->\n%s\n", result);
-        else
-            printf("*** Dump failed\n");
+        if (m.type) {
+            DumpBuffer dump_buffer;
+            const char* result = dump_buffer.dump(m, 2);
+            if (result)
+                printf("\n -->\n%s\n", result);
+            else
+                printf("*** Dump failed\n");
+        }
 
     } catch (MinionError& e) {
         printf("ERROR: %s\n", e.what());

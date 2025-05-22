@@ -100,8 +100,15 @@ class MMap : public std::vector<MPair*>
 
 class InputBuffer
 {
+    //TODO--
+public:
+    //--
+
     class MacroMap
     {
+        //TODO--
+    public:
+        //--
         std::forward_list<MPair> macros;
 
     public:

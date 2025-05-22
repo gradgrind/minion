@@ -37,24 +37,22 @@ void prnode(
 }
 //--
 
-typedef enum {
-    // The "real" types must correspond to their indexes in the
-    // MinionValue variant.
+enum minion_type {
     T_NoType = 0,
     T_String,
-    T_Array,
-    T_PairArray,
-    T_Real_End,  // start of structural tokens
-    T_Macro,     // an undefined macro
-    T_Token_End, // end of data
-    T_Token_String_Delim,
-    T_Token_ListStart,
-    T_Token_ListEnd,
-    T_Token_MapStart,
-    T_Token_MapEnd,
-    T_Token_Comma,
-    T_Token_Colon,
-} minion_type;
+    T_List,
+    T_Map,
+
+    T_Pair //TODO???
+};
+
+enum expect_type { Expect_Value = 0, Expect_Comma, Expect_Colon, Expect_End };
+
+const std::map<int, std::string> seek_message = {{T_NoType, "top-level value"},
+                                                 {T_String, "string"},
+                                                 {T_List, "list entry"},
+                                                 {T_Map, "map entry key"},
+                                                 {T_Pair, "map entry value"}};
 
 // Test whether a minion_type corresponds to a valid MValue.
 // If there is no type, throw an exception (it's a bug).
@@ -116,9 +114,9 @@ void MValue::mcopy(
     case T_String:
         m = MValue(T_String, new MString(*reinterpret_cast<MString*>(minion_item)));
         break;
-    case T_Array: {
+    case T_List: {
         auto mlist = new MList;
-        m = {T_Array, mlist};
+        m = {T_List, mlist};
         auto ml = reinterpret_cast<MList*>(minion_item);
         for (auto& v : *ml) {
             mlist->emplace_back(MValue{});
@@ -127,9 +125,9 @@ void MValue::mcopy(
         }
         break;
     };
-    case T_PairArray: {
+    case T_Map: {
         auto mmap = new MMap;
-        m = {T_PairArray, mmap};
+        m = {T_Map, mmap};
         auto mm = reinterpret_cast<MMap*>(minion_item);
         for (auto& mp : *mm) {
             mmap->emplace_back(mp.first, MValue{});
@@ -153,14 +151,14 @@ void MValue::free()
     case T_String:
         delete reinterpret_cast<MString*>(minion_item);
         break;
-    case T_Array: {
+    case T_List: {
         auto ml = reinterpret_cast<MList*>(minion_item);
         for (auto& v : *ml) {
             v.free();
         }
         delete ml;
     } break;
-    case T_PairArray:
+    case T_Map:
         auto mm = reinterpret_cast<MMap*>(minion_item);
         for (auto& mp : *mm) {
             mp.second.free();
@@ -251,151 +249,47 @@ void InputBuffer::error(
     throw MinionError(mx);
 }
 
-/* Read the next "item" from the input.
- * Return the minion_type of the item read, which may be a string, a
- * macro name, an "array" (list) or an "object" (map). If the input is
- * invalid, a MinionError exception will be thrown, containing a message.
- * Also the structural symbols have types, though they have no
- * associated data.
- * 
- * Strings (and macro names) are read into a buffer, which grows if it is
- * too small. Compound items are constructed while being read.
- */
-int InputBuffer::get_item(
-    MValue& mvalue)
+void InputBuffer::get_bare_string(
+    char ch)
 {
-    char ch;
     ch_buffer.clear();
-    int result;
     while (true) {
-        ch = read_ch(false);
-        if (ch_buffer.size() != 0) {
-            // An undelimited string item has already been started
-            while (true) {
-                // Test for an item-terminating character
-                if (ch == ' ' || ch == '\n')
-                    break;
-                if (ch == ':' || ch == ',' || ch == ']' || ch == '}') {
-                    unread_ch();
-                    break;
-                }
-                if (ch == 0)
-                    break;
-                if (ch == '{' || ch == '[' || ch == '\\' || ch == '"') {
-                    auto s = std::string("Unexpected character ('");
-                    s.push_back(ch);
-                    error(s.append("' at position ").append(pos(here())));
-                }
-                ch_buffer.push_back(ch);
-                ch = read_ch(false);
-            }
-            // Check whether macro name
-            if (ch_buffer[0] == '&') {
-                result = T_Macro;
-                break;
-            }
-            // A string without delimiters
-            result = T_String;
-            break;
+        ch_buffer.push_back(ch);
+        switch (ch = read_ch(false)) {
+        case ':':
+        case ',':
+        case ']':
+        case '}':
+            unread_ch();
+        case ' ':
+        case '\n':
+        case 0:
+            return;
+        case '{':
+        case '[':
+        case '\\':
+        case '"': {
+            auto s = std::string("Unexpected character ('");
+            s.push_back(ch);
+            error(s.append("' at position ").append(pos(here())));
         }
-
-        // Look for start of next item
-        if (ch == 0) {
-            result = T_Token_End; // end of input, no next item
-            break;
         }
-        if (ch == ' ' || ch == '\n') {
-            continue; // continue seeking start of item
-        }
-
-        if (ch == '#') {
-            // Start comment
-            ch = read_ch(false);
-            if (ch == '[') {
-                // Extended comment: read to "]#"
-                position comment_pos = here();
-                ch = read_ch(false);
-                while (true) {
-                    if (ch == ']') {
-                        ch = read_ch(false);
-                        if (ch == '#') {
-                            break;
-                        }
-                        continue;
-                    }
-                    if (ch == 0) {
-                        error(std::string("Unterminated comment ('\\[ ...') at position ")
-                                  .append(pos(comment_pos)));
-                    }
-                    // Comment loop ... read next character
-                    ch = read_ch(false);
-                }
-                // End of extended comment
-            } else {
-                // "Normal" comment: read to end of line
-                while (true) {
-                    if (ch == '\n' || ch == 0) {
-                        break;
-                    }
-                    ch = read_ch(false);
-                }
-            }
-            continue; // continue seeking item
-        }
-        // Delimited string
-        if (ch == '"') {
-            get_string();
-            result = T_String;
-            break;
-        }
-        // list
-        if (ch == '[') {
-            get_list(mvalue);
-            result = T_Array;
-            break;
-        }
-        // map
-        if (ch == '{') {
-            get_map(mvalue);
-            result = T_PairArray;
-            break;
-        }
-        // further structural symbols
-        if (ch == ']') {
-            result = T_Token_ListEnd;
-            break;
-        }
-        if (ch == '}') {
-            result = T_Token_MapEnd;
-            break;
-        }
-        if (ch == ':') {
-            result = T_Token_Colon;
-            break;
-        }
-        if (ch == ',') {
-            result = T_Token_Comma;
-            break;
-        }
-        ch_buffer.push_back(ch); // start undelimited string
-    } // End of item-seeking loop
-    return result;
+    }
 }
 
-/* Read a delimited string (terminated by '"') from the input.
- *
- * It is entered after the initial '"' has been read, so the next character
- * will be the first of the string.
- *
- * Escapes, introduced by '\', are possible. These are an extension of the
- * JSON escapes – see the MINION specification.
- *
- * The string is available in ch_buffer
- */
-void InputBuffer::get_string()
+// The result is available in `ch_buffer`.
+void InputBuffer::get_string(
+    char ch)
 {
+    if (ch != '"') {
+        // +++ string without delimiters
+        get_bare_string(ch);
+        return;
+    }
+    // +++ a delimited string (terminated by '"')
+    // Escapes, introduced by '\', are possible. These are an extension
+    // of the JSON escapes – see the MINION specification.
     position start_pos = here();
-    char ch;
     while (true) {
         ch = read_ch(true);
         if (ch == '"')
@@ -469,6 +363,199 @@ void InputBuffer::get_string()
     }
 }
 
+/* Read the next "item" from the input.
+ * Return the minion_type of the item read, which may be a string, a
+ * macro name, an "array" (list) or an "object" (map). If the input is
+ * invalid, a MinionError exception will be thrown, containing a message.
+ * Also the structural symbols have types, though they have no
+ * associated data.
+ * 
+ * Strings (and macro names) are read into a buffer, which grows if it is
+ * too small. Compound items are constructed while being read.
+ */
+void InputBuffer::get_item(
+    MValue& mvalue, int expect)
+{
+    char ch;
+    while (true) {
+        bool delimited_string = false;
+        switch (ch = read_ch(false)) {
+            // Act according to the next input character.
+
+        case 0: // end of input, no next item
+            if (expect != Expect_End) {
+                error(std::string("Unexpected end of input data while reading ")
+                          .append(seek_message.at(mvalue.type)));
+            }
+            return;
+
+        case ' ':
+        case '\n': // continue seeking start of item
+            continue;
+
+        case ':':
+            if (expect == Expect_Colon)
+                return;
+            error(std::string("Unexpected ':' while reading ").append(seek_message.at(mvalue.type)));
+
+        case ']':
+            if (mvalue.type == T_List && (expect == Expect_Value || expect == Expect_Comma)) {
+                return;
+            }
+            error(std::string("Unexpected ']' while reading ").append(seek_message.at(mvalue.type)));
+
+        case '}':
+            if (mvalue.type == T_Map && (expect == Expect_Value || expect == Expect_Comma)) {
+                return;
+            }
+            error(std::string("Unexpected ']' while reading ").append(seek_message.at(mvalue.type)));
+
+        case ',':
+            if (expect == Expect_Comma) {
+                expect = Expect_Value;
+                continue;
+            }
+
+        case '&': // start of macro name
+            // valid at top level or as value in list or map
+            //TODO
+            get_bare_string(ch);
+
+        case '[':
+            if (expect == Expect_Value) {
+                switch (mvalue.type) {
+                case T_NoType: // top-level value
+                    mvalue = {T_List, new MList()};
+                    get_list(mvalue);
+                    // No further input expected
+                    expect = Expect_End;
+                    continue;
+                case T_List: // list value
+                {
+                    MValue m = {T_List, new MList()};
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(m);
+                    get_list(m);
+                    expect = Expect_Comma;
+                    continue;
+                }
+                case T_Pair: // map value                {
+                {
+                    MValue m = {T_List, new MList()};
+                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(m);
+                    get_list(m);
+                    expect = Expect_Comma;
+                    continue;
+                }
+                }
+            }
+            error(std::string("Unexpected start of list"));
+
+        case '{':
+            //TODO
+            if (expect == Expect_Value) {
+                switch (mvalue.type) {
+                case T_NoType: // top-level value
+                    mvalue = {T_Map, new MMap()};
+                    get_map(mvalue);
+                    // No further input expected
+                    expect = Expect_End;
+                    continue;
+                case T_List: // list value
+                {
+                    MValue m = {T_Map, new MMap()};
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(m);
+                    get_map(m);
+                    expect = Expect_Comma;
+                    continue;
+                }
+                case T_Pair: // map value                {
+                {
+                    MValue m = {T_Map, new MMap()};
+                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(m);
+                    get_map(m);
+                    expect = Expect_Comma;
+                    continue;
+                }
+                }
+            }
+            error(std::string("Unexpected start of list"));
+
+        case '#': // start comment
+            ch = read_ch(false);
+            if (ch == '[') {
+                // Extended comment: read to "]#"
+                position comment_pos = here();
+                ch = read_ch(false);
+                while (true) {
+                    if (ch == ']') {
+                        ch = read_ch(false);
+                        if (ch == '#') {
+                            break;
+                        }
+                        continue;
+                    }
+                    if (ch == 0) {
+                        error(std::string("Unterminated comment ('\\[ ...') at position ")
+                                  .append(pos(comment_pos)));
+                    }
+                    // Comment loop ... read next character
+                    ch = read_ch(false);
+                }
+                // End of extended comment
+            } else {
+                // "Normal" comment: read to end of line
+                while (true) {
+                    if (ch == '\n' || ch == 0) {
+                        break;
+                    }
+                    ch = read_ch(false);
+                }
+            }
+            continue; // continue seeking item
+
+        case '"': // delimited string
+        default:  // start of undelimited string
+            if (expect == Expect_Value) {
+                switch (mvalue.type) {
+                case T_NoType: // top-level value
+                    get_string(ch);
+                    mvalue = MValue(ch_buffer);
+                    // No further input expected
+                    expect = Expect_End;
+                    continue;
+                case T_Map: // map-key value
+                {
+                    get_string(ch);
+                    auto mp = new MPair(ch_buffer, {});
+                    reinterpret_cast<MMap*>(mvalue.minion_item)->emplace_back(mp);
+                    MValue m = {T_Pair, mp};
+                    get_map_value(m);
+                    expect = Expect_Comma;
+                    continue;
+                }
+                case T_List: // list value
+                    get_string(ch);
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(ch_buffer);
+                    expect = Expect_Comma;
+                    continue;
+                case T_Pair: // map value                {
+                    get_string(ch);
+                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(ch_buffer);
+                    expect = Expect_Comma;
+                    continue;
+                }
+            }
+            error(std::string("Unexpected start of string value"));
+
+        } // End of character switch
+    } // End of item-seeking loop
+}
+
+//TODO???
+void InputBuffer::get_map_value(
+    MValue& mvalue)
+{}
+
 // Convert a unicode code point (as hex string) to a UTF-8 string
 bool InputBuffer::add_unicode_to_ch_buffer(
     int len)
@@ -521,7 +608,7 @@ void InputBuffer::get_list(
     printf("§l+\n");
     prnode(*base_ref);
 
-    mvalue = {T_Array, mlist};
+    mvalue = {T_List, mlist};
     position current_pos = here();
 
     //TODO: I think I need to stack (references to) these temporary
@@ -588,7 +675,7 @@ void InputBuffer::get_map(
     //auto mmap = new MMap;
     auto mmap = new MMap();
 
-    mvalue = {T_PairArray, mmap};
+    mvalue = {T_Map, mmap};
 
     printf("§m+\n");
     prnode(*base_ref);
@@ -933,10 +1020,10 @@ void DumpBuffer::dump_value(
     case T_String:
         dump_string(*reinterpret_cast<MString*>(source.minion_item));
         break;
-    case T_Array:
+    case T_List:
         dump_list(*reinterpret_cast<MList*>(source.minion_item));
         break;
-    case T_PairArray:
+    case T_Map:
         dump_map(*reinterpret_cast<MMap*>(source.minion_item));
         break;
     default:
@@ -970,7 +1057,7 @@ MValue::MValue(
 // MValue.
 MValue::MValue(
     std::initializer_list<MValue> items)
-    : type{T_Array} //, minion_item{new MList}
+    : type{T_List} //, minion_item{new MList}
     , minion_item{new MList()}
 {
     for (const auto& item : items) {
@@ -982,7 +1069,7 @@ MValue::MValue(
 // pairs.
 MValue::MValue(
     std::initializer_list<MPair> items)
-    : type{T_PairArray} //, minion_item{new MMap}
+    : type{T_Map} //, minion_item{new MMap}
     , minion_item{new MMap()}
 {
     for (const auto& item : items) {
@@ -999,14 +1086,14 @@ MString* MValue::m_string()
 
 MList* MValue::m_list()
 {
-    if (type == T_Array)
+    if (type == T_List)
         return reinterpret_cast<MList*>(minion_item);
     return nullptr;
 }
 
 MMap* MValue::m_map()
 {
-    if (type == T_PairArray)
+    if (type == T_Map)
         return reinterpret_cast<MMap*>(minion_item);
     return nullptr;
 }

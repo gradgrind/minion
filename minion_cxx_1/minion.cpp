@@ -415,18 +415,18 @@ void InputBuffer::get_item(
                 case T_Macro: // top-level, macro value definition
                     get_bare_string(ch);
                     mvalue = get_macro(ch_buffer);
-                    return;
+                    expect = Expect_Comma;
+                    continue;
 
                 case T_List: // list value
                     get_bare_string(ch);
-                    reinterpret_cast<MList*>(mvalue.minion_item)->add(get_macro(ch_buffer));
+                    mvalue.m_list()->add(get_macro(ch_buffer));
                     expect = Expect_Comma;
                     continue;
 
                 case T_Pair: // map value                {
                     get_bare_string(ch);
-                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(
-                        get_macro(ch_buffer));
+                    mvalue = get_macro(ch_buffer);
                     return;
                 }
             }
@@ -446,7 +446,7 @@ void InputBuffer::get_item(
                 case T_List: // list value
                 {
                     MValue m = {T_List, new MList()};
-                    reinterpret_cast<MList*>(mvalue.minion_item)->add(m);
+                    mvalue.m_list()->add(m);
                     get_item(m);
                     expect = Expect_Comma;
                     continue;
@@ -454,9 +454,8 @@ void InputBuffer::get_item(
 
                 case T_Pair: // map value                {
                 {
-                    MValue m = {T_List, new MList()};
-                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(m);
-                    get_item(m);
+                    mvalue = {T_List, new MList()};
+                    get_item(mvalue);
                     return;
                 }
 
@@ -483,16 +482,15 @@ void InputBuffer::get_item(
                 case T_List: // list value
                 {
                     MValue m = {T_Map, new MMap()};
-                    reinterpret_cast<MList*>(mvalue.minion_item)->add(m);
+                    mvalue.m_list()->add(m);
                     get_item(m);
                     expect = Expect_Comma;
                     continue;
                 }
                 case T_Pair: // map value                {
                 {
-                    MValue m = {T_Map, new MMap()};
-                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(m);
-                    get_item(m);
+                    mvalue = {T_Map, new MMap()};
+                    get_item(mvalue);
                     return;
                 }
 
@@ -554,14 +552,14 @@ void InputBuffer::get_item(
                 {
                     get_string(ch);
                     // check that the key is unique
-                    if (!mvalue.map_search(ch_buffer).is_null()) {
+                    auto mm = mvalue.m_map();
+                    if (mm->search(ch_buffer) >= 0) {
                         error(std::string("Map key has already been defined: ")
                                   .append(ch_buffer)
                                   .append(" ... current position ")
                                   .append(pos(here())));
                     }
-                    auto mm = mvalue.m_map();
-                    mm->add({ch_buffer, {}});
+                    mm->add({ch_buffer, {T_Pair, {}}});
                     MValue& m = mm->get_pair(mm->size() - 1).second;
                     get_item(m, Expect_Colon);
                     expect = Expect_Comma;
@@ -569,12 +567,12 @@ void InputBuffer::get_item(
                 }
                 case T_List: // list value
                     get_string(ch);
-                    reinterpret_cast<MList*>(mvalue.minion_item)->add(MValue{ch_buffer});
+                    mvalue.m_list()->add(MValue{ch_buffer});
                     expect = Expect_Comma;
                     continue;
                 case T_Pair: // map value                {
                     get_string(ch);
-                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(ch_buffer);
+                    mvalue = MValue(ch_buffer);
                     return;
                 case T_Macro:
                     get_string(ch);
@@ -797,11 +795,8 @@ void DumpBuffer::dump_list(
     MValue& source)
 {
     add('[');
-
     auto l = source.m_list();
     int len = l->size();
-
-    //int len = source.size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
@@ -819,21 +814,23 @@ void DumpBuffer::dump_list(
 }
 
 void DumpBuffer::dump_map(
-    MMap& source)
+    MValue& source)
 {
     add('{');
-    int len = source.size();
+    auto m = source.m_map();
+    int len = m->size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
             ++depth;
-        for (const auto& mp : source) {
+        for (int i = 0; i < len; ++i) {
             dump_pad();
-            dump_string(mp->first);
+            MPair& mp = m->get_pair(i);
+            dump_string(mp.first);
             add(':');
             if (depth >= 0)
                 add(' ');
-            dump_value(mp->second);
+            dump_value(mp.second);
             add(',');
         }
         depth = d;
@@ -854,7 +851,7 @@ void DumpBuffer::dump_value(
         dump_list(source);
         break;
     case T_Map:
-        dump_map(*reinterpret_cast<MMap*>(source.minion_item));
+        dump_map(source);
         break;
     default:
         throw "[BUG] MINION dump: bad MValue type";
@@ -903,7 +900,7 @@ MValue::MValue(
     , minion_item{new MMap()}
 {
     for (const auto& item : items) {
-        reinterpret_cast<MMap*>(minion_item)->emplace_back(new MPair{item});
+        reinterpret_cast<MMap*>(minion_item)->add(item);
     }
 }
 
@@ -926,20 +923,6 @@ MMap* MValue::m_map()
     if (type == T_Map)
         return reinterpret_cast<MMap*>(minion_item);
     return nullptr;
-}
-
-// If the item is a map and if it has an entry with the given key,
-// return the value of that entry. Otherwise return a null value.
-MValue MValue::map_search(
-    std::string_view key)
-{
-    if (type == T_Map) {
-        for (auto& mp : *reinterpret_cast<MMap*>(minion_item)) {
-            if (mp->first == key)
-                return mp->second;
-        }
-    }
-    return {};
 }
 
 } // End of namespace minion

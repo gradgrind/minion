@@ -53,7 +53,6 @@ struct MValue
     MMap* m_map();
 
     void copy(MinionValue& m); // deep copy function
-    MValue map_search(std::string_view key);
 
 protected:
     void free();
@@ -263,9 +262,8 @@ class DumpBuffer
     void dump_value(MValue& source);
     void dump_string(std::string_view source);
     void dump_string(MValue& source);
-    //void dump_list(MList& source);
     void dump_list(MValue& source);
-    void dump_map(MMap& source);
+    void dump_map(MValue& source);
     void dump_pad();
 
 public:

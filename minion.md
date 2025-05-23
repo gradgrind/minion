@@ -1,4 +1,4 @@
-# MINION: MINImal Object Notation, v.5
+# MINION: MINImal Object Notation, version 1.0 (2025-05-23)
 
 MINION is a simple data-transfer format closely related to JSON. The main aim was to have a format which makes it a bit easier to write configuration files and other structured data manually than it would be with JSON, without going in a completely different design direction. To keep it simple, there is only a single data type, the string. Thus any problems with the numeric values in JSON (only float, limited range, etc.) are avoided by not having any numbers – if they are needed, conversions must be done at the receiving end, where they can be adapted to the needs of the application. In other areas MINION is more flexible than JSON:
 

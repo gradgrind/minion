@@ -1,1 +1,10 @@
-This is a simple translation of the C version to C++ without using "real" C++.
+This version uses the namespace "minion".
+It uses no global variables for deserializing or serializing, using instances of the classes InputBuffer and DumpBuffer.
+
+The basic structural node is MValue, which can be a string, a list or a map. There is also an empty value, which is not the result of a successful parse, and there are other possibilities which are used internally.
+
+MValue items do not manage their memory, they are  rather a sort of reference. In addition there is the MinionValue, which is basically the same (it is a subclass of MValue), but it has a destructor to release the memory allocated to the whole structure.
+
+The parser, InputBuffer::read, takes a reference to a MinionValue as argument and places the parse result in this. So this one variable manages the memory for the whole parsed structure.
+
+To ensure that no memory is leaked while parsing, the structure is built "in place" – all newly allocated elements are immediately added to the structure so that there are no "floating" chunks of heap memory. Even in the case of an error, all allocated memory is attached to the parse result so that it can be released.

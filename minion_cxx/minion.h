@@ -1,46 +1,213 @@
 #ifndef MINION_H
 #define MINION_H
-#ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef unsigned int msize;
+#include <forward_list>
+#include <stdexcept>
+#include <vector>
 
-typedef struct
+/* The parser, Minion::read returns a single minion_value. If there is an
+ * error, a MinionError exception will be thrown.
+ */
+ 
+namespace minion {
+
+class MinionError : public std::runtime_error {
+public:
+	// Using constructor for passing custom message
+	MinionError(const std::string& message)
+        : runtime_error(message) {}
+};
+
+// Used for recording read-position in input text
+struct position
 {
-    short type;
-    short flags;
-    msize size;
-    void* data;
-} minion_value;
+    size_t line_n;
+    size_t byte_ix;
+};
 
-typedef struct macro_node
+// forward declarations
+struct MValue;
+using MPair = std::pair<std::string, MValue>;
+struct MinionValue;
+class InputBuffer;
+class DumpBuffer;
+class MString;
+class MList;
+class MMap;
+
+struct MValue
 {
-    char* name;
-    struct macro_node* next;
-    minion_value value;
-} macro_node;
+    friend MinionValue;
+    friend InputBuffer;
+    friend DumpBuffer;
 
-typedef struct
+    MValue() = default;
+    MValue(std::string_view s);
+    MValue(std::initializer_list<MValue> items);
+    MValue(std::initializer_list<MPair> items);
+
+    bool is_null();
+
+    MString* m_string();
+    MList* m_list();
+    MMap* m_map();
+
+    void copy(MinionValue& m); // deep copy function
+
+protected:
+    void free();
+
+    int type{0};
+    bool not_owner{false};
+    void* minion_item{nullptr};
+
+    MValue(
+        int t, void* p, bool o = false)
+        : type{t}
+        , not_owner{o}
+        , minion_item{p}
+    {}
+
+    void mcopy(MValue& m); // used by copy method
+};
+
+struct MinionValue : public MValue
 {
-    minion_value minion_item;
-    minion_value error;
-    macro_node* macros;
-} minion_doc;
+    MinionValue() = default;
+    MinionValue(
+        MValue m)
+    {
+        type = m.type;
+        minion_item = m.minion_item;
+    }
 
-minion_doc minion_read(const char* input);
-char* minion_error(minion_doc doc);
-// Free the memory used for a minion item.
-void minion_free(minion_doc doc);
+    ~MinionValue() { free(); }
 
-char* minion_dump(minion_value source, int depth);
-// Free the memory used for a minion dump.
-void minion_tidy_dump();
+    MinionValue& operator=(
+        const MinionValue& source)
+    {
+        // self-assignment check
+        if (this != &source) {
+            this->free();
+            type = source.type;
+            minion_item = source.minion_item;
+            not_owner = false;
+        }
+        return *this;
+    }
+};
 
-// Free longer term minion memory (can be retained between minion_read calls)
-void minion_tidy();
+class MString : public std::string
+{};
 
-#ifdef __cplusplus
-}
-#endif
+class MList : public std::vector<MValue>
+{};
+
+class MMap : public std::vector<MPair*>
+{};
+
+class InputBuffer
+{
+
+    class MacroMap
+    {
+        std::forward_list<MPair> macros;
+
+    public:
+        void clear()
+        {
+            for (auto& mp : macros) {
+                mp.second.free();
+            }
+            macros.clear();
+        }
+
+        bool has(
+            std::string& key)
+        {
+            for (auto& mp : macros) {
+                if (mp.first == key) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        MValue& first_value() { return macros.front().second; }
+
+        MValue get(
+            std::string& key)
+        {
+            for (auto& mp : macros) {
+                if (mp.first == key) {
+                    auto m = mp.second;
+                    mp.second.not_owner = true;
+                    return m;
+                }
+            }
+            return {};
+        }
+
+        MPair& add(
+            std::string& key, MValue value)
+        {
+            macros.emplace_front(key, value);
+            return macros.front();
+        }
+    };
+
+    MValue get_macro(std::string& s);
+
+
+    std::string_view input;
+    size_t ch_index;
+    size_t line_index;
+    size_t ch_linestart;
+    std::string ch_buffer; // for reading strings
+
+    MacroMap macro_map;
+    std::string error_message;
+
+    char read_ch(bool instring);
+    void unread_ch();
+    position here() { return {line_index + 1, ch_index - ch_linestart}; }
+    std::string pos(
+        position p)
+    {
+        return std::to_string(p.line_n) + '.' + std::to_string(p.byte_ix);
+    }
+    void error(std::string_view msg);
+    void get_item(MValue& mvalue, int expect = 0);
+    void get_string(char ch);
+    void get_bare_string(char ch);
+    bool add_unicode_to_ch_buffer(int len);
+
+public:
+    const char* read(MinionValue& data, std::string_view s);
+};
+
+class DumpBuffer
+{
+    int indent = 2;
+    int depth;
+    std::string buffer;
+
+    void add(
+        char ch)
+    {
+        buffer.push_back(ch);
+    }
+    void pop() { buffer.pop_back(); }
+    void dump_value(const MValue& source);
+    void dump_string(const std::string& source);
+    void dump_list(MList& source);
+    void dump_map(MMap& source);
+    void dump_pad();
+
+public:
+    const char* dump(MValue& data, int pretty = -1);
+};
+
+} // namespace minion
+
 #endif // MINION_H

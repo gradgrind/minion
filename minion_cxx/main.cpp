@@ -1,49 +1,74 @@
 #include "iofile.h"
 #include "minion.h"
 #include <cstdio>
-#include <time.h>
 #include <cstdlib>
+#include <time.h>
+
+using namespace minion;
 
 int main()
 {
-    const char* fp = "../data/test4.minion";
-    const char* f = read_file(fp);
-    if (!f) {
-        printf("File not found: %s\n", fp);
-		exit(1);
-	}
+    auto fplist = {
+        "../data/test1.minion",
+        //"../data/test1a.minion",
+        "../data/test2.minion",
+        //"../data/test2a.minion",
+        //"../data/test2e.minion",
+        "../data/test3.minion",
+        "../data/test4.minion",
+        //"../data/test4e.minion"
+        //
+    };
 
-    struct timespec start, end;
-    minion_doc parsed;
+    std::string indata;
+
+    struct timespec start, end, xtra;
+
+    InputBuffer miniondata;
+
+    MinionValue m;
 
     for (int count = 0; count < 10; ++count) {
-        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
+        for (const auto& fp : fplist) {
+            const char* f = read_file(fp);
+            if (!f) {
+                printf("File not found: %s\n", fp);
+                exit(1);
+            }
+            indata = f;
 
-        parsed = minion_read(f);
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
-        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
-        double elapsed = end.tv_sec - start.tv_sec;
-        elapsed += (end.tv_nsec - start.tv_nsec) / 1000.0;
-        printf("%0.2f microseconds elapsed\n", elapsed);
-        minion_free(parsed);
+            miniondata.read(m, indata);
+
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
+
+            m = {};
+
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current time
+
+            double elapsed = end.tv_sec - start.tv_sec;
+            elapsed += (end.tv_nsec - start.tv_nsec) / 1000.0;
+            printf("%0.2f microseconds elapsed\n", elapsed);
+
+            elapsed = xtra.tv_sec - end.tv_sec;
+            elapsed += (xtra.tv_nsec - end.tv_nsec) / 1000.0;
+            printf("%0.2f microseconds freeing\n", elapsed);
+        }
+        printf("  - - - - -\n");
     }
 
-    parsed = minion_read(f);
-
-    char* e = minion_error(parsed);
-    if (e) {
-        printf("ERROR: %s\n", (char*) e);
-    } else {
-        printf("Returned type: %d\n", parsed.minion_item.type);
-
-        char* result = minion_dump(parsed.minion_item, 0);
+    auto perror = miniondata.read(m, indata);
+    if (perror) {
+        printf("PARSE ERROR: %s\n", perror);
+    } else if (!m.is_null()) {
+        DumpBuffer dump_buffer;
+        const char* result = dump_buffer.dump(m, 2);
         if (result)
             printf("\n -->\n%s\n", result);
         else
             printf("*** Dump failed\n");
     }
-    minion_free(parsed);
 
-    minion_tidy(); // free minion buffers
     return 0;
 }

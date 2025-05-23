@@ -19,4 +19,4 @@ add_executable(minion
     iofile.cpp iofile.h
     )
 
-set_property(TARGET minion PROPERTY CXX_STANDARD 11)
+set_property(TARGET minion PROPERTY CXX_STANDARD 20)

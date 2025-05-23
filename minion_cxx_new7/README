@@ -1,3 +1,0 @@
-This version should not leak memory – also when an error occurs ...
-
-It is an attempt to build in place using MinionValue (an MValue subclass with destructor) as base. All new allocations are added to the structure being built immediately, so that they are always accessible to the deleter.

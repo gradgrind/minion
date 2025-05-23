@@ -1,444 +1,163 @@
 #include "minion.h"
-//#include <stdbool.h>
-#include <csetjmp>
-#include <cstdarg>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include <map>
 
-/* All the values in minion_Flags (apart from the null F_NoFlags) are
- * greater than the highest value in minion_Type, so that when type is
- * T_NoType the flags value can be used instead without ambiguity.
-*/
-#define MIN_FLAG 8
-typedef enum {
-    F_NoFlags = 0,
-    F_Simple_String = MIN_FLAG, // undelimited string
-    F_Error,
-    F_Macro,
-    F_Token_End,
-    F_Token_String_Delim,
-    F_Token_ListStart,
-    F_Token_ListEnd,
-    F_Token_MapStart,
-    F_Token_MapEnd,
-    F_Token_Comma,
-    F_Token_Colon,
+namespace minion {
 
-    // This bit will be set if the data field refers to memory that this
-    // item does not "own", i.e. it shouldn't be freed.
-    F_MACRO_VALUE = 32
-} minion_Flags;
-
-typedef enum {
+enum minion_type {
     T_NoType = 0,
     T_String,
-    T_Array,
-    T_PairArray,
-} minion_Type;
+    T_List,
+    T_Map,
 
-// For character-by-character reading
-static const char* ch_pointer0;
-static const char* ch_pointer;
-static const char* ch_linestart = 0;
-static msize line_index;
+    T_Pair,
+    T_Macro
+};
 
-/* *** BUFFERS ***
- * minion uses buffers for various purposes. These get their space using
- * malloc and may grow when more space is needed.
- * This space is not freed, so that once a buffer has been created it can
- * be reused. Also at the end of a call to minion_read it is not
- * necessary to free the space, so that subsequent calls may not need to
- * reallocate the space. However, it may be desirable to free this space
- * at some time, so for this purpose there is the function minion_tidy().
-*/
+enum expect_type { Expect_Value = 0, Expect_Comma, Expect_Colon, Expect_End };
 
-// read_buffer is used for constructinging strings before they are passed
-// to minion_value items.
-static char* read_buffer = 0;
-#define read_buffer_size_increment 100
-static size_t read_buffer_size = 0;
-static size_t read_buffer_index = 0;
-void reset_read_buffer_index()
+const inline std::map<int, std::string> seek_message = {{T_NoType, "top-level value"},
+                                                        {T_String, "string"},
+                                                        {T_List, "list entry"},
+                                                        {T_Map, "map entry key"},
+                                                        {T_Pair, "map entry value"},
+                                                        {T_Macro, "macro value definition"}};
+
+/* *** Memory management ***
+ * TODO ... not up to date ...
+ * The Minion class manages memory allocation for MINION items and the
+ * buffers needed for parsing and building them. A MinionValue is thus
+ * dependent on the Minion instance used to build it.
+ */
+
+/* *** Data sharing ***
+ * To reduce allocations and deallocations the actual data is stored on
+ * the heap and referenced by non-smart pointers. The data can then be
+ * passed around, and even shared (in the case of macro substitutions)
+ * without incurring extra allocations.
+ * When the data is no longer needed it must be released. This is handled
+ * by the FreeMinion class, which runs through all the allocated nodes
+ * recursively. For this to work, all heap-allocated items which are not
+ * deleted separately (e.g. by the normal C++ mechanisms) must end up
+ * in the value tree, where they can be reached by the freer.
+ * To avoid double freeing of shared nodes (which can arise when macros
+ * are used), the freer keeps track of nodes it has already deleted.
+ */
+
+/* *** Macros ***
+ * Macros use the shared-data feature to avoid having to copy their data.
+ * Immediately after definition they are stored as normal MinionValues in
+ * the data stack, and their addresses are also stored in some sort of map
+ * so that they can be accessed by name. When a reference
+ * to a macro is found, its MinionValue address can be got from the map.
+ */
+
+//TODO: When parsing, keep track of unused macros so that these can
+// be freed .. and maybe flagged as errors?
+
+// +++ Deep copy of MValue +++
+// This must build in-place to avoid potential memory leaks.
+void MValue::copy(
+    MinionValue& m)
 {
-    read_buffer_index = 0;
+    mcopy(m);
 }
 
-void add_to_read_buffer(
-    char ch)
+void MValue::mcopy(
+    MValue& m)
 {
-    if (read_buffer_index == read_buffer_size) {
-        // Increase the size of the buffer
-        void* tmp = malloc(read_buffer_size + read_buffer_size_increment);
-        if (!tmp)
-            exit(1);
-        memcpy(tmp, read_buffer, read_buffer_size);
-        free(read_buffer);
-        read_buffer = (char*) tmp;
-        read_buffer_size += read_buffer_size_increment;
-    }
-    read_buffer[read_buffer_index++] = ch;
-}
-
-// dump_buffer is used for serializing a minion_value.
-static char* dump_buffer = 0;
-#define dump_buffer_size_increment 1000
-static int dump_buffer_size = 0;
-static int dump_buffer_index = 0;
-
-void clear_dump_buffer()
-{
-    dump_buffer_index = 0;
-}
-
-void dump_ch(
-    char ch)
-{
-    if (dump_buffer_index == dump_buffer_size) {
-        // Increase the size of the buffer
-        void* tmp = malloc(dump_buffer_size + dump_buffer_size_increment);
-        if (!tmp)
-            exit(1);
-        memcpy(tmp, dump_buffer, dump_buffer_size);
-        free(dump_buffer);
-        dump_buffer = (char*) tmp;
-        dump_buffer_size += dump_buffer_size_increment;
-    }
-    dump_buffer[dump_buffer_index++] = ch;
-}
-
-// Remove last added character – useful for trailing commas.
-void undump_ch()
-{
-    dump_buffer_index--;
-}
-
-// Error handling
-jmp_buf recover; // for error recovery
-
-// error_message is a buffer used in reporting errors. The error message
-// is stored here before being passed to a special minion_value (type
-// T_Error).
-static char* error_message = 0;
-static int error_message_size = 0;
-
-void error(
-    const char* msg, ...)
-{
-    va_list args;
-    va_start(args, msg);
-    // Get string size (add 1 for 0-terminator) without writing anything
-    int n = vsnprintf(0, 0, msg, args);
-    //int n = vsnprintf(error_message, error_message_size, msg, args);
-    if (n < 0) {
-        fprintf(stderr, "[BUG] Invalid error message: %s\n", msg);
-        exit(100);
-    }
-
-    // Add most recently read characters
-    const char* ch_start = ch_pointer0;
-    int recent = ch_pointer - ch_start;
-    if (recent > 80) {
-        ch_start = ch_pointer - 80;
-        // Find start of utf-8 sequence
-        while (true) {
-            unsigned char ch = *ch_start;
-            if (ch < 0x80 || (ch >= 0xC0 && ch < 0xF8))
-                break;
-            ++ch_start;
+    switch (type) {
+    case T_String:
+        m = MValue(T_String, new MString(*reinterpret_cast<MString*>(minion_item)));
+        break;
+    case T_List: {
+        auto mlist = new MList;
+        m = {T_List, mlist};
+        auto ml = reinterpret_cast<MList*>(minion_item);
+        for (auto& v : *ml) {
+            mlist->emplace_back(MValue{});
+            MValue& mref = (*mlist)[mlist->size() - 1];
+            v.mcopy(mref);
         }
-        recent = ch_pointer - ch_start;
+        break;
+    };
+    case T_Map: {
+        auto mmap = new MMap;
+        m = {T_Map, mmap};
+        auto mm = reinterpret_cast<MMap*>(minion_item);
+        for (auto& mp : *mm) {
+            auto mpair = new MPair(mp->first, {});
+            mmap->emplace_back(mpair);
+            mp->second.mcopy(mpair->second);
+        }
+        break;
+    };
+    default:
+        // This is unexpected ...
+        throw "[BUG] Invalid MValue whilst copying";
     }
-    int nx = n + recent + 10;
-    if (error_message_size < nx) {
-        free(error_message);
-        error_message = (char*) malloc(nx);
-        if (!error_message)
-            exit(1);
-        error_message_size = nx;
-    }
-
-    /*
-    if (error_message_size < ++n) {
-        free(error_message);
-        error_message = malloc(n);
-        if (!error_message)
-            exit(1);
-        error_message_size = n;
-    }
-    */
-
-    va_start(args, msg); // restart the argument reading
-    vsnprintf(error_message, error_message_size, msg, args);
-    va_end(args);
-
-    n += snprintf(error_message + n, 8, "\n ... ");
-    memcpy(error_message + n, ch_start, recent);
-    error_message[n + recent] = 0;
-
-    longjmp(recover, 2);
 }
 
-// Keep track of "unbound" minion items
-// The buffer for these items is used as a stack.
-static minion_value* remembered_items = 0;
-#define remembered_items_size_increment 10
-static int remembered_items_size = 0;
-static int remembered_items_index = 0;
-
-typedef struct
+void MValue::free()
 {
-    minion_value key;
-    minion_value value;
-} minion_pair;
-
-// Free the memory used for a minion item.
-void free_item(
-    minion_value mitem)
-{
-    if (mitem.flags & F_MACRO_VALUE)
+    if (not_owner)
         return;
-    if (mitem.type == T_Array) {
-        minion_value* p = (minion_value*) mitem.data;
-        msize n = mitem.size;
-        for (msize i = 0; i < n; ++i) {
-            free_item(p[i]);
+    switch (type) {
+    case T_String:
+        delete reinterpret_cast<MString*>(minion_item);
+        break;
+    case T_List: {
+        auto ml = reinterpret_cast<MList*>(minion_item);
+        for (auto& v : *ml) {
+            v.free(); // delete the entry value
         }
-    } else if (mitem.type == T_PairArray) {
-        minion_pair* p = (minion_pair*) mitem.data;
-        msize n = mitem.size;
-        for (msize i = 0; i < n; ++i) {
-            minion_pair mp = p[i];
-            free_item(mp.key);
-            free_item(mp.value);
+        delete ml; // delete the vector
+    } break;
+    case T_Map:
+        auto mm = reinterpret_cast<MMap*>(minion_item);
+        for (auto& mp : *mm) {
+            mp->second.free(); // delete the entry value
+            delete mp;         // delete the entry (including the key)
         }
+        delete mm; // delete the vector
+        break;
     }
-    // Free the memory pointed to directly by the data field. This will
-    // collect the actual array storage from the above items or the
-    // character storage for strings, etc.
-    free(mitem.data);
-    // free() does nothing if the address it gets is NULL. But if
-    // non-pointer types should be used sometime with values in the
-    // data field, a further type/flag test would be needed to avoid
-    // trying to free these!
+    type = T_NoType;
+    minion_item = nullptr;
 }
 
-// Manage the macros
-static macro_node* macros = NULL;
-
-void new_macro() {}
-
-void free_macros(
-    macro_node* mp)
+// Represent number as a string with hexadecimal digits, at least minwidth.
+std::string to_hex(
+    long val, int minwidth)
 {
-    while (mp) {
-        free(mp->name);
-        free_item(mp->value);
-        macro_node* mp0 = mp;
-        mp = mp->next;
-        free(mp0);
+    std::string s;
+    if (val >= 16 || minwidth > 1) {
+        s = to_hex(val / 16, minwidth - 1);
+        val %= 16;
     }
+    if (val < 10)
+        s.push_back('0' + val);
+    else
+        s.push_back('A' + val - 10);
+    return s;
 }
 
-minion_value* find_macro(
-    char* name)
-{
-    macro_node* mp = macros;
-    while (mp) {
-        if (strcmp(name, mp->name) == 0) {
-            return &mp->value;
-        }
-        mp = mp->next;
-    }
-    return NULL;
-}
-
-bool real_minion_value(
-    short mtype)
-{
-    return (mtype != T_NoType && mtype < MIN_FLAG);
-}
-
-/* Some allocated memory can be retained between minion_read calls,
- * but it should probably be freed sometime, if it is really no
- * longer needed.
-*/
-// The dump memory can be freed on its own.
-void minion_tidy_dump()
-{
-    free(dump_buffer);
-    dump_buffer = 0;
-    dump_buffer_size = 0;
-    dump_buffer_index = 0;
-}
-
-// Free all longer-term buffers.
-void minion_tidy()
-{
-    free(read_buffer);
-    //printf("??? Size of read_buffer = %zu\n", read_buffer_size);
-    read_buffer = 0;
-    read_buffer_size = 0;
-    read_buffer_index = 0;
-
-    free(error_message);
-    error_message = 0;
-    error_message_size = 0;
-
-    free(remembered_items);
-    remembered_items = 0;
-    remembered_items_size = 0;
-    remembered_items_index = 0;
-}
-
-bool minion_isString(
-    minion_value v)
-{
-    return (v.type == T_String);
-}
-
-void minion_free(
-    minion_doc doc)
-{
-    free_item(doc.minion_item);
-    free_macros(doc.macros);
-    free_item(doc.error);
-}
-
-void remember(
-    minion_value minion_item)
-{
-    if (remembered_items_index == remembered_items_size) {
-        // Need more space
-        int n = remembered_items_size + remembered_items_size_increment;
-        minion_value* tmp = (minion_value*) realloc(remembered_items, n * sizeof(minion_value));
-        if (tmp == NULL) {
-            // alloc failed
-            free(remembered_items);
-            exit(1);
-        } else if (tmp != remembered_items)
-            remembered_items = tmp;
-        remembered_items_size = n;
-    }
-    // Add new item
-    remembered_items[remembered_items_index++] = minion_item;
-}
-
-void release()
-{
-    for (int i = 0; i < remembered_items_index; ++i) {
-        free_item(remembered_items[i]);
-    }
-    remembered_items_index = 0;
-}
-
-// --- END: Keep track of "unbound" malloced items ---
-
-// Build a new String item from a char*. Place the result on the
-// remember stack.
-void new_String(
-    const char* text, minion_Type stype, minion_Flags sflags)
-{
-    // Remember "+1" for 0-terminator
-    unsigned int l = strlen(text);
-    void* s = malloc(sizeof(char) * (l + 1));
-    if (!s)
-        exit(1);
-    memcpy(s, text, l + 1);
-    remember((minion_value) {(short)stype, (short) sflags, l, s});
-}
-
-// Build a new Array item from items on the stack, the starting index
-// being passed as argument.
-// Place the result on the remember stack.
-void new_Array(
-    int start_index)
-{
-    void* a = 0;
-    int len = remembered_items_index - start_index;
-    if (len > 0) {
-        size_t nbytes = sizeof(minion_value) * len;
-        a = malloc(nbytes);
-        if (!a)
-            exit(1);
-        memcpy(a, &remembered_items[start_index], nbytes);
-        // Remove the component items before the Array item is addded.
-        remembered_items_index = start_index;
-    } else if (len < 0) {
-        fputs("[BUG] In new_Array: remembered_items_index < start_index", stderr);
-        exit(100);
-    }
-    remember((minion_value) {T_Array, 0, (msize) len, a});
-}
-
-// Build a new PairArray item from items on the stack, the starting index
-// being passed as argument.
-// Place the result on the remember stack.
-void new_PairArray(
-    int start_index)
-{
-    void* a = 0;
-    int len = remembered_items_index - start_index;
-    if (len & 1) {
-        // Each entry is a pair, i.e. it consists of two items.
-        fputs("[BUG] In new_PairArray: odd number of items on stack", stderr);
-        exit(100);
-    }
-    if (len > 0) {
-        len /= 2; // A key/value pair makes up one Pair item
-        size_t nbytes = sizeof(minion_pair) * len;
-        a = malloc(nbytes);
-        if (!a)
-            exit(1);
-        memcpy(a, &remembered_items[start_index], nbytes);
-        // Remove the component items before the PairArray item is addded.
-        remembered_items_index = start_index;
-    } else if (len < 0) {
-        fputs("[BUG] In new_PairArray: remembered_items_index < start_index", stderr);
-        exit(100);
-    }
-    remember((minion_value) {T_PairArray, 0, (msize) len, a});
-}
-
-typedef struct
-{
-    msize line_n;
-    msize byte_ix;
-} position;
-
-position here()
-{
-    return (position) {line_index + 1, (msize) (ch_pointer - ch_linestart)};
-}
-
-#define position_size 20
-static char position_buffer[position_size];
-char* pos(
-    position p)
-{
-    snprintf(position_buffer, position_size, "%d.%d", p.line_n, p.byte_ix);
-    return position_buffer;
-}
-
-static char read_ch(
+char InputBuffer::read_ch(
     bool instring)
 {
-    char ch = *ch_pointer;
-    if (ch == 0) {
-        // end of data
+    if (ch_index >= input.size())
         return 0;
-    }
-    ++ch_pointer;
+    char ch = input.at(ch_index);
+    ++ch_index;
     if (ch == '\n') {
         ++line_index;
-        ch_linestart = ch_pointer;
+        ch_linestart = ch_index;
         // these are not acceptable within delimited strings
         if (!instring) {
             // separator
             return ch;
         }
-        error("Unexpected newline in delimited string, line %d", line_index);
-        exit(3); // unreachable
+        error(std::string("Unexpected newline in delimited string at line ")
+                  .append(std::to_string(line_index)));
     } else if (ch == '\r' || ch == '\t') {
         // these are acceptable in the source, but not within strings.
         if (!instring) {
@@ -448,91 +167,92 @@ static char read_ch(
     } else if ((unsigned char) ch >= 32 && ch != 127) {
         return ch;
     }
-    error("Illegal character (%2x) at position %s", (unsigned char) ch, pos(here()));
-    exit(3); // unreachable
+    error(std::string("Illegal character (byte) 0x")
+              .append(to_hex(ch, 2))
+              .append(" at position ")
+              .append(pos(here())));
+    return 0; // unreachable
 }
 
-void unread_ch()
+void InputBuffer::unread_ch()
 {
-    if (ch_pointer == ch_pointer0) {
-        fputs("[BUG] unread_ch reached start of data", stderr);
-        exit(100);
+    if (ch_index == 0) {
+        error("[BUG] unread_ch reached start of data");
     }
-    --ch_pointer;
+    --ch_index;
     //NOTE: '\n' is never unread!
 }
-// --- END: Handle character-by-character reading ---
 
-// Convert a unicode code point (as hex string) to a UTF-8 string
-bool add_unicode_to_read_buffer(
-    int len)
+void InputBuffer::error(
+    std::string_view msg)
 {
-    // Convert the unicode to an integer
-    char ch;
-    int digit;
-    unsigned int code_point = 0;
-    for (int i = 0; i < len; ++i) {
-        ch = read_ch(true);
-        if (ch >= '0' && ch <= '9') {
-            digit = ch - '0';
-        } else if (ch >= 'a' && ch <= 'f') {
-            digit = ch - 'a' + 10;
-        } else if (ch >= 'A' && ch <= 'F') {
-            digit = ch - 'A' + 10;
-        } else
-            return false;
-        code_point *= 16;
-        code_point += digit;
+    // Add most recently read characters
+    int ch_start = 0;
+    int recent = ch_index - ch_start;
+    if (recent > 80) {
+        ch_start = ch_index - 80;
+        // Find start of utf-8 sequence
+        while (true) {
+            unsigned char ch = input[ch_start];
+            if (ch < 0x80 || (ch >= 0xC0 && ch < 0xF8))
+                break;
+            ++ch_start;
+        }
+        recent = ch_index - ch_start;
     }
-    // Convert the code point to a UTF-8 string
-    if (code_point <= 0x7F) {
-        add_to_read_buffer(code_point);
-    } else if (code_point <= 0x7FF) {
-        add_to_read_buffer((code_point >> 6) | 0xC0);
-        add_to_read_buffer((code_point & 0x3F) | 0x80);
-    } else if (code_point <= 0xFFFF) {
-        add_to_read_buffer((code_point >> 12) | 0xE0);
-        add_to_read_buffer(((code_point >> 6) & 0x3F) | 0x80);
-        add_to_read_buffer((code_point & 0x3F) | 0x80);
-    } else if (code_point <= 0x10FFFF) {
-        add_to_read_buffer((code_point >> 18) | 0xF0);
-        add_to_read_buffer(((code_point >> 12) & 0x3F) | 0x80);
-        add_to_read_buffer(((code_point >> 6) & 0x3F) | 0x80);
-        add_to_read_buffer((code_point & 0x3F) | 0x80);
-    } else {
-        // Invalid input
-        return false;
-    }
-    return true;
+    auto mx = std::string{msg}.append("\n ... ").append(&input[ch_start], recent);
+    throw MinionError(mx);
 }
 
-// The "get_" family of functions reads the corresponding item from the
-// input. If the result is a minion item, that will be placed on the
-// remember stack. The "get_" functions return the type of the item that
-// was read – the structural tokens have no malloced memory, so they do
-// not need to be stacked.
-
-/* Read a delimited string (terminated by '"') from the input.
- *
- * It is entered after the initial '"' has been read, so the next character
- * will be the first of the string.
- *
- * Escapes, introduced by '\', are possible. These are an extension of the
- * JSON escapes – see the MINION specification.
- *
- * Return the string as a minion_value.
- */
-minion_Type get_string()
+void InputBuffer::get_bare_string(
+    char ch)
 {
+    ch_buffer.clear();
+    while (true) {
+        ch_buffer.push_back(ch);
+        switch (ch = read_ch(false)) {
+        case ':':
+        case ',':
+        case ']':
+        case '}':
+            unread_ch();
+        case ' ':
+        case '\n':
+        case 0:
+            return;
+        case '{':
+        case '[':
+        case '\\':
+        case '"': {
+            auto s = std::string("Unexpected character ('");
+            s.push_back(ch);
+            error(s.append("' at position ").append(pos(here())));
+        }
+        }
+    }
+}
+
+// The result is available in `ch_buffer`.
+void InputBuffer::get_string(
+    char ch)
+{
+    if (ch != '"') {
+        // +++ string without delimiters
+        get_bare_string(ch);
+        return;
+    }
+    // +++ a delimited string (terminated by '"')
+    // Escapes, introduced by '\', are possible. These are an extension
+    // of the JSON escapes – see the MINION specification.
+    ch_buffer.clear();
     position start_pos = here();
-    char ch;
     while (true) {
         ch = read_ch(true);
         if (ch == '"')
             break;
         if (ch == 0) {
-            error("End of data reached inside delimited string from position %s", pos(start_pos));
-            exit(3); // unreachable
+            error(std::string("End of data reached inside delimited string from position ")
+                      .append(pos(start_pos)));
         }
         if (ch == '\\') {
             ch = read_ch(false); // '\n' etc. are permitted here
@@ -557,15 +277,17 @@ minion_Type get_string()
                 ch = '\r';
                 break;
             case 'u':
-                if (add_unicode_to_read_buffer(4))
+                if (add_unicode_to_ch_buffer(4))
                     continue;
-                error("Invalid unicode escape in string, position %s", pos(here()));
-                exit(3); // unreachable
+                error(
+                    std::string("Invalid unicode escape in string, position ").append(pos(here())));
+                break; // unreachable
             case 'U':
-                if (add_unicode_to_read_buffer(6))
+                if (add_unicode_to_ch_buffer(6))
                     continue;
-                error("Invalid unicode escape in string, position %s", pos(here()));
-                exit(3); // unreachable
+                error(
+                    std::string("Invalid unicode escape in string, position ").append(pos(here())));
+                break; // unreachable
             case '[':
                 // embedded comment, read to "\]"
                 {
@@ -580,9 +302,9 @@ minion_Type get_string()
                             continue;
                         }
                         if (ch == 0) {
-                            error("End of data reached inside string comment from position %s",
-                                  pos(comment_pos));
-                            exit(3); // unreachable
+                            error(std::string(
+                                      "End of data reached inside string comment from position ")
+                                      .append(pos(comment_pos)));
                         }
                         // loop with next character
                         ch = read_ch(false);
@@ -590,202 +312,210 @@ minion_Type get_string()
                 }
                 continue; // comment ended, seek next character
             default:
-                error("Illegal string escape at position %s", pos(here()));
-                exit(3); // unreachable
+                error(std::string("Illegal string escape at position ").append(pos(here())));
             }
         }
-        add_to_read_buffer(ch);
+        ch_buffer.push_back(ch);
     }
-    // Add 0-terminator
-    add_to_read_buffer(0);
-    new_String(read_buffer, T_String, F_NoFlags);
-    return T_String;
 }
 
-short get_item();
-
-minion_Type get_list()
+MValue InputBuffer::get_macro(
+    std::string& s)
 {
-    int start_index = remembered_items_index;
-    position current_pos = here();
-    short mtype = get_item();
-    while (true) {
-        // ',' before the closing bracket is allowed
-        if (mtype == F_Token_ListEnd)
-            break;
-        if (real_minion_value(mtype)) {
-            current_pos = here();
-            mtype = get_item();
-            if (mtype == F_Token_ListEnd) {
-                break;
-            } else if (mtype == F_Token_Comma) {
-                current_pos = here();
-                mtype = get_item();
-                continue;
-            }
-            error("Reading list, expecting ',' or ']' at position %s", pos(current_pos));
-            exit(3); // unreachable
-        }
-        if (mtype == F_Macro) {
-            error("Undefined macro name at position %s", pos(current_pos));
-            exit(3); // unreachable
-        } else {
-            error("Expecting list item or ']' at position %s", pos(current_pos));
-            exit(3); // unreachable
-        }
+    auto m = macro_map.get(s);
+    if (m.type == T_NoType) {
+        error(std::string("Unknown macro name: ")
+                  .append(ch_buffer)
+                  .append(" ... current position ")
+                  .append(pos(here())));
     }
-    new_Array(start_index);
-    return T_Array;
+    return m;
 }
 
-minion_value last_item()
+MValue* map_search(
+    MMap* mmap, std::string_view key)
 {
-    if (remembered_items_index) {
-        return remembered_items[remembered_items_index - 1];
+    for (auto& mp : *mmap) {
+        if (mp->first == key)
+            return &mp->second;
     }
-    fputs("[BUG] 'last_item: remembered' stack corrupted", stderr);
-    exit(100);
-}
-
-bool is_key_unique(
-    int i_start)
-{
-    char* key = (char*) last_item().data;
-    int i = i_start;
-    int i_end = remembered_items_index - 1; // index of key
-    while (i < i_end) {
-        if (strcmp((char*) remembered_items[i].data, key) == 0)
-            return false;
-        i += 2;
-    }
-    return true;
-}
-
-minion_Type get_map()
-{
-    int start_index = remembered_items_index;
-    position current_pos = here();
-    short mtype = get_item();
-    char const* seeking;
-    while (true) {
-        // ',' before the closing bracket is allowed
-        if (mtype == F_Token_MapEnd)
-            break;
-        // expect key
-        if (mtype == T_String) {
-            if (!is_key_unique(start_index)) {
-                error("Map key has already been defined: %s (at position %s)",
-                      last_item().data,
-                      pos(current_pos));
-            }
-            current_pos = here();
-            mtype = get_item();
-            // expect ':'
-            if (mtype != F_Token_Colon) {
-                error("Expecting ':' in Map item at position %s", pos(current_pos));
-                exit(3); // unreachable
-            }
-            current_pos = here();
-            mtype = get_item();
-            // expect value
-            seeking = "Reading map, expecting a value at position %s";
-            if (real_minion_value(mtype)) {
-                current_pos = here();
-                mtype = get_item();
-                if (mtype == F_Token_MapEnd) {
-                    break;
-                } else if (mtype == F_Token_Comma) {
-                    current_pos = here();
-                    mtype = get_item();
-                    continue;
-                }
-                error("Reading map, expecting ',' or '}' at position %s", pos(current_pos));
-                exit(3); // unreachable
-            } else if (mtype == F_Macro) {
-                seeking = "Expecting map value, undefined macro name at position %s";
-            }
-        } else {
-            seeking = "Reading map, expecting a key at position %s";
-        }
-        error(seeking, pos(current_pos));
-        exit(3); // unreachable
-    }
-    new_PairArray(start_index);
-    return T_PairArray;
+    return nullptr;
 }
 
 /* Read the next "item" from the input.
- * Return the minion_Type of the item read, which may be a string, an
- * "array" (list) or an "object" (map). If the input is invalid, a
- * special "error" value will be returned, containing a message.
- * Also the structural symbols have types.
+ * Return the minion_type of the item read, which may be a string, a
+ * macro name, an "array" (list) or an "object" (map). If the input is
+ * invalid, a MinionError exception will be thrown, containing a message.
+ * Also the structural symbols have types, though they have no
+ * associated data.
  * 
- * Strings are read into a buffer, which grows if it is too small.
- * Compound items are constructed by reading their components onto a stack.
-*/
-short get_item()
+ * Strings (and macro names) are read into a buffer, which grows if it is
+ * too small. Compound items are constructed while being read.
+ */
+void InputBuffer::get_item(
+    MValue& mvalue, int expect)
 {
     char ch;
-    reset_read_buffer_index();
-    short result;
     while (true) {
-        ch = read_ch(false);
-        if (read_buffer_index != 0) {
-            // An undelimited string item has already been started
-            while (true) {
-                // Test for an item-terminating character
-                if (ch == ' ' || ch == '\n')
-                    break;
-                if (ch == ':' || ch == ',' || ch == ']' || ch == '}') {
-                    unread_ch();
-                    break;
-                }
-                if (ch == 0)
-                    break;
-                if (ch == '{' || ch == '[' || ch == '\\' || ch == '"') {
-                    error("Unexpected character ('%c') at position %s",
-                          (unsigned char) ch,
-                          pos(here()));
-                    exit(3); // unreachable
-                }
-                add_to_read_buffer(ch);
-                ch = read_ch(false);
-            }
-            // Add 0-terminator
-            add_to_read_buffer(0);
-            // Check whether macro name
-            if (*read_buffer == '&') {
-                minion_value* mm = find_macro(read_buffer);
-                if (mm) {
-                    // Push to remember stack, marking it as not the owner of
-                    // its data
-                    remember(
-                        (minion_value) {mm->type, (short)(mm->flags + F_MACRO_VALUE), mm->size, mm->data});
-                    result = mm->type;
-                    break;
-                }
-                // An undefined macro name
-                new_String(read_buffer, T_NoType, F_Macro);
-                result = F_Macro;
-                break;
-            }
-            // A String without delimiters
-            new_String(read_buffer, T_String, F_Simple_String);
-            result = T_String;
-            break;
-        }
+        switch (ch = read_ch(false)) {
+            // Act according to the next input character.
 
-        // Look for start of next item
-        if (ch == 0) {
-            result = F_Token_End; // end of input, no next item
-            break;
-        }
-        if (ch == ' ' || ch == '\n') {
-            continue; // continue seeking start of item
-        }
+        case 0: // end of input, no next item
+            if (expect != Expect_End) {
+                error(std::string("Unexpected end of input data while reading ")
+                          .append(seek_message.at(mvalue.type)));
+            }
+            return;
 
-        if (ch == '#') {
-            // Start comment
+        case ' ':
+        case '\n': // continue seeking start of item
+            continue;
+
+        case ':':
+            if (expect == Expect_Colon) {
+                expect = Expect_Value;
+                continue;
+            }
+            error(std::string("Unexpected ':' while reading ").append(seek_message.at(mvalue.type)));
+            break; // unreachable
+
+        case ']':
+            if (mvalue.type == T_List && (expect == Expect_Value || expect == Expect_Comma)) {
+                return;
+            }
+            error(std::string("Unexpected ']' while reading ").append(seek_message.at(mvalue.type)));
+            break; // unreachable
+
+        case '}':
+            if (mvalue.type == T_Map && (expect == Expect_Value || expect == Expect_Comma)) {
+                return;
+            }
+            error(std::string("Unexpected ']' while reading ").append(seek_message.at(mvalue.type)));
+            break; // unreachable
+
+        case ',':
+            if (expect == Expect_Comma) {
+                expect = Expect_Value;
+                continue;
+            }
+            error(std::string("Unexpected ',' while reading ").append(seek_message.at(mvalue.type)));
+            break; // unreachable
+
+        case '&': // start of macro name
+            // valid at top level, as macro value, or as value in
+            // lists or maps
+            if (expect == Expect_Value) {
+                switch (mvalue.type) {
+                case T_NoType: // top-level, macro key definition
+                    get_bare_string(ch);
+                    // check that the key is unique
+                    if (macro_map.has(ch_buffer)) {
+                        error(std::string("Macro key has already been defined: ")
+                                  .append(ch_buffer)
+                                  .append(" ... current position ")
+                                  .append(pos(here())));
+                    }
+                    macro_map.add(ch_buffer, MValue{T_Macro, nullptr});
+                    get_item(macro_map.first_value(), Expect_Colon);
+                    expect = Expect_Comma;
+                    continue;
+
+                case T_Macro: // top-level, macro value definition
+                    get_bare_string(ch);
+                    mvalue = get_macro(ch_buffer);
+                    return;
+
+                case T_List: // list value
+                    get_bare_string(ch);
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(get_macro(ch_buffer));
+                    expect = Expect_Comma;
+                    continue;
+
+                case T_Pair: // map value                {
+                    get_bare_string(ch);
+                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(
+                        get_macro(ch_buffer));
+                    return;
+                }
+            }
+            error(std::string("Unexpected macro name at position ").append(pos(here())));
+            break; // unreachable
+
+        case '[':
+            if (expect == Expect_Value) {
+                switch (mvalue.type) {
+                case T_NoType: // top-level value
+                    mvalue = {T_List, new MList()};
+                    get_item(mvalue);
+                    // No further input expected
+                    expect = Expect_End;
+                    continue;
+
+                case T_List: // list value
+                {
+                    MValue m = {T_List, new MList()};
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(m);
+                    get_item(m);
+                    expect = Expect_Comma;
+                    continue;
+                }
+
+                case T_Pair: // map value                {
+                {
+                    MValue m = {T_List, new MList()};
+                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(m);
+                    get_item(m);
+                    return;
+                }
+
+                case T_Macro: // top-level, macro value definition
+                {
+                    mvalue = {T_List, new MList()};
+                    get_item(mvalue);
+                    return;
+                }
+                }
+            }
+            error(std::string("Unexpected start of list ('[')"));
+            break; // unreachable
+
+        case '{':
+            if (expect == Expect_Value) {
+                switch (mvalue.type) {
+                case T_NoType: // top-level value
+                    mvalue = {T_Map, new MMap()};
+                    get_item(mvalue);
+                    // No further input expected
+                    expect = Expect_End;
+                    continue;
+                case T_List: // list value
+                {
+                    MValue m = {T_Map, new MMap()};
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(m);
+                    get_item(m);
+                    expect = Expect_Comma;
+                    continue;
+                }
+                case T_Pair: // map value                {
+                {
+                    MValue m = {T_Map, new MMap()};
+                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(m);
+                    get_item(m);
+                    return;
+                }
+
+                case T_Macro: // top-level, macro value definition
+                {
+                    mvalue = {T_Map, new MMap()};
+                    get_item(mvalue);
+                    return;
+                }
+                }
+            }
+            error(std::string("Unexpected start of map ('{')"));
+            break; // unreachable
+
+        case '#': // start comment
             ch = read_ch(false);
             if (ch == '[') {
                 // Extended comment: read to "]#"
@@ -800,8 +530,8 @@ short get_item()
                         continue;
                     }
                     if (ch == 0) {
-                        error("Unterminated comment ('\\[ ...') at position %s", pos(comment_pos));
-                        exit(3); // unreachable
+                        error(std::string("Unterminated comment ('\\[ ...') at position ")
+                                  .append(pos(comment_pos)));
                     }
                     // Comment loop ... read next character
                     ch = read_ch(false);
@@ -817,325 +547,386 @@ short get_item()
                 }
             }
             continue; // continue seeking item
-        }
-        // Delimited string
-        if (ch == '"') {
-            result = get_string();
-            break;
-        }
-        // list
-        if (ch == '[') {
-            result = get_list();
-            break;
-        }
-        // map
-        if (ch == '{') {
-            result = get_map();
-            break;
-        }
-        // further structural symbols
-        if (ch == ']') {
-            result = F_Token_ListEnd;
-            break;
-        }
-        if (ch == '}') {
-            result = F_Token_MapEnd;
-            break;
-        }
-        if (ch == ':') {
-            result = F_Token_Colon;
-            break;
-        }
-        if (ch == ',') {
-            result = F_Token_Comma;
-            break;
-        }
-        add_to_read_buffer(ch); // start undelimited string
+
+        case '"': // delimited string
+        default:  // start of undelimited string
+            if (expect == Expect_Value) {
+                switch (mvalue.type) {
+                case T_NoType: // top-level value
+                    get_string(ch);
+                    mvalue = MValue(ch_buffer);
+                    // No further input expected
+                    expect = Expect_End;
+                    continue;
+                case T_Map: // map-key value
+                {
+                    get_string(ch);
+                    // check that the key is unique
+                    auto mm = reinterpret_cast<MMap*>(mvalue.minion_item);
+                    if (map_search(mm, ch_buffer)) {
+                        error(std::string("Map key has already been defined: ")
+                                  .append(ch_buffer)
+                                  .append(" ... current position ")
+                                  .append(pos(here())));
+                    }
+                    auto mp = new MPair(ch_buffer, {});
+                    mm->emplace_back(mp);
+                    MValue m = {T_Pair, mp};
+                    get_item(m, Expect_Colon);
+                    expect = Expect_Comma;
+                    continue;
+                }
+                case T_List: // list value
+                    get_string(ch);
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(ch_buffer);
+                    expect = Expect_Comma;
+                    continue;
+                case T_Pair: // map value                {
+                    get_string(ch);
+                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(ch_buffer);
+                    return;
+                case T_Macro:
+                    get_string(ch);
+                    mvalue = MValue(ch_buffer);
+                    return;
+                }
+            }
+            error(std::string("Unexpected start of string value"));
+        } // End of character switch
     } // End of item-seeking loop
-    return result;
 }
 
-minion_doc minion_read(
-    const char* input)
+// Convert a unicode code point (as hex string) to a UTF-8 string
+bool InputBuffer::add_unicode_to_ch_buffer(
+    int len)
 {
-    if (macros) {
-        fputs("[BUG] macros list not cleared", stderr);
-        exit(100);
+    // Convert the unicode to an integer
+    char ch;
+    int digit;
+    unsigned int code_point = 0;
+    for (int i = 0; i < len; ++i) {
+        ch = read_ch(true);
+        if (ch >= '0' && ch <= '9') {
+            digit = ch - '0';
+        } else if (ch >= 'a' && ch <= 'f') {
+            digit = ch - 'a' + 10;
+        } else if (ch >= 'A' && ch <= 'F') {
+            digit = ch - 'A' + 10;
+        } else
+            return false;
+        code_point *= 16;
+        code_point += digit;
     }
-    ch_pointer0 = input;
-    ch_pointer = input;
-    ch_linestart = input;
+    // Convert the code point to a UTF-8 string
+    if (code_point <= 0x7F) {
+        ch_buffer.push_back(code_point);
+    } else if (code_point <= 0x7FF) {
+        ch_buffer.push_back((code_point >> 6) | 0xC0);
+        ch_buffer.push_back((code_point & 0x3F) | 0x80);
+    } else if (code_point <= 0xFFFF) {
+        ch_buffer.push_back((code_point >> 12) | 0xE0);
+        ch_buffer.push_back(((code_point >> 6) & 0x3F) | 0x80);
+        ch_buffer.push_back((code_point & 0x3F) | 0x80);
+    } else if (code_point <= 0x10FFFF) {
+        ch_buffer.push_back((code_point >> 18) | 0xF0);
+        ch_buffer.push_back(((code_point >> 12) & 0x3F) | 0x80);
+        ch_buffer.push_back(((code_point >> 6) & 0x3F) | 0x80);
+        ch_buffer.push_back((code_point & 0x3F) | 0x80);
+    } else {
+        // Invalid input
+        return false;
+    }
+    return true;
+}
+
+// *** Serializing MINION ***
+
+/* Some allocated memory can be retained between minion_read calls,
+ * but it should probably be freed sometime, if it is really no
+ * longer needed.
+*/
+
+// Build a new minion list item from the arguments, which are MinionValues.
+// The source data (referenced by the data fields) is not copied, thus
+// the new list takes on ownership if the "not-owner" flags of the data
+// are clear.
+/*
+MinionValue Minion::new_array(std::initializer_list<MinionValue> items)
+{
+    auto start_index = remembered_items_index;
+    for (const auto& item : items) {
+        remember(item);
+    }
+    auto m = MinionValue(&remembered_items[start_index],
+        remembered_items_index - start_index, false);
+    remembered_items_index = start_index;
+    return m;
+}
+
+// Build a new minion map from the given minion_map items.
+// The source data of the value items (referenced by the data fields) is
+// not copied, thus the new map takes on ownership if the "not-owner" flags
+// of the data are clear.
+MinionValue Minion::new_map(std::initializer_list<map_item> items)
+{
+    auto start_index = remembered_items_index;
+    for (const auto& item : items) {
+        remember(item.key);
+        remember(item.value);
+    }
+    auto m = MinionValue(&remembered_items[start_index],
+        remembered_items_index - start_index, true);
+    remembered_items_index = start_index;
+    return m;
+}
+*/
+
+const char* InputBuffer::read(
+    MinionValue& data, std::string_view input_string)
+{
+    // Prepare input buffer
+    input = input_string;
+    ch_index = 0;
     line_index = 0;
-    if (setjmp(recover)) {
-        // Free redundant malloced items
-        for (int i = 0; i < remembered_items_index; ++i) {
-            free_item(remembered_items[i]);
-        }
-        remembered_items_index = 0;
-        // Free any macros
-        free_macros(macros);
-        macros = NULL;
-        // Prepare error message
-        new_String(error_message, T_NoType, F_Error);
-        minion_value m = *remembered_items;
-        remembered_items_index = 0;
-        return (minion_doc) {{T_NoType, F_NoFlags, 0, 0}, m, NULL};
+    ch_linestart = 0;
+
+    // Clear result data, just to be sure ...
+    data.free();
+    macro_map.clear();
+
+    try {
+        get_item(data);
+    } catch (MinionError& e) {
+        data.free();
+        macro_map.clear();
+        error_message = e.what();
+        return error_message.c_str();
+    } catch (...) {
+        data.free();
+        macro_map.clear();
+        throw;
     }
 
-    while (true) {
-        position current_position = here();
-        short mtype = get_item();
-        if (mtype != F_Macro) {
-            if (last_item().flags & F_MACRO_VALUE) {
-                error("Position %s: macro value at top level ... redefining?",
-                      pos(current_position));
-                exit(3); // unreachable
-            } else if (real_minion_value(mtype)) {
-                // found document item
-                break;
-            }
-            // Invalid item
-            if (mtype == F_Token_End) {
-                error("Document contains no main item");
-                exit(3); // unreachable
-            }
-            error("Invalid minion item at position %s", pos(current_position));
-            exit(3); // unreachable
-        }
-        // *** macro name: read the definition ***
-        // Check for duplicate
-        current_position = here();
-        // expect ':'
-        mtype = get_item();
-        if (mtype != F_Token_Colon) {
-            error("Expecting ':' in macro definition at position %s", pos(current_position));
-            exit(3); // unreachable
-        }
-        current_position = here();
-        mtype = get_item();
-        // expect value
-        if (real_minion_value(mtype)) {
-            // expect ','
-            mtype = get_item();
-            if (mtype == F_Token_Comma) {
-                // Add the macro, taking on ownership of the
-                // allocated memory
-                minion_value mname = remembered_items[0];
-                minion_value mval = remembered_items[1];
-                remembered_items_index = 0;
-                macro_node* a = (macro_node*) malloc(sizeof(macro_node));
-                if (!a)
-                    exit(1);
-                *a = (macro_node) {(char*) mname.data, macros, mval};
-                macros = a;
-                continue;
-            }
-            error("After macro definition: expecting ',' at position %s", pos(current_position));
-            exit(3); // unreachable
-        }
-        error("In macro definition, expecting a value at position %s", pos(current_position));
-        exit(3); // unreachable
+    /*
+    DumpBuffer d;
+    for (auto& mp : macro_map.macros) {
+        printf("&: %s\n", mp.first.c_str());
+        printf("  == %s\n\n", d.dump(mp.second));
     }
-    // "Real" minion item, not macro definition => document content
-    minion_value m = *remembered_items;
-    remembered_items_index = 0;
-    minion_doc doc = {m, {T_NoType, F_NoFlags, 0, NULL}, macros};
-    macros = NULL;
+    */
 
-    // Check that there are no further items
-    position current_position = here();
-    if (get_item() != F_Token_End) {
-        minion_free(doc);
-        error("Position %s: unexpected item after document item", pos(current_position));
-        exit(3); // unreachable
-    }
-
-    return doc;
-    // NOTE:
-    // The result will need to be freed with minion_free() at some point
-    // by the caller.
-    // Also the buffers error_message, read_buffer and remembered_items
-    // have malloced memory, which should be freed (the normal free()) if
-    // they are no longer needed – see function minion_tidy().
+    macro_map.clear();
+    return nullptr;
 }
 
-char* minion_error(
-    minion_doc doc)
+void DumpBuffer::dump_string(
+    const std::string& source)
 {
-    return (char*) (doc.error.flags == F_Error ? doc.error.data : NULL);
-}
-
-void dump_string(
-    const char* source)
-{
-    dump_ch('"');
-    int i = 0;
-    unsigned char ch;
-    while (true) {
-        ch = source[i++];
+    add('"');
+    for (unsigned char ch : source) {
         switch (ch) {
         case '"':
-            dump_ch('\\');
-            dump_ch('"');
+            add('\\');
+            add('"');
             break;
         case '\n':
-            dump_ch('\\');
-            dump_ch('n');
+            add('\\');
+            add('n');
             break;
         case '\t':
-            dump_ch('\\');
-            dump_ch('t');
+            add('\\');
+            add('t');
             break;
         case '\b':
-            dump_ch('\\');
-            dump_ch('b');
+            add('\\');
+            add('b');
             break;
         case '\f':
-            dump_ch('\\');
-            dump_ch('f');
+            add('\\');
+            add('f');
             break;
         case '\r':
-            dump_ch('\\');
-            dump_ch('r');
+            add('\\');
+            add('r');
             break;
         case '\\':
-            dump_ch('\\');
-            dump_ch('\\');
+            add('\\');
+            add('\\');
             break;
         case 127:
-            dump_ch('\\');
-            dump_ch('u');
-            dump_ch('0');
-            dump_ch('0');
-            dump_ch('7');
-            dump_ch('F');
+            add('\\');
+            add('u');
+            add('0');
+            add('0');
+            add('7');
+            add('F');
             break;
         default:
             if (ch >= 32) {
-                dump_ch(ch);
-            } else if (ch == 0) {
-                // The string is 0-terminated, so \u0000 is not
-                // possible as a character.
-                dump_ch('"');
-                return;
+                add(ch);
             } else {
-                dump_ch('\\');
-                dump_ch('u');
-                dump_ch('0');
-                dump_ch('0');
+                add('\\');
+                add('u');
+                add('0');
+                add('0');
                 if (ch >= 16) {
-                    dump_ch('1');
+                    add('1');
                     ch -= 16;
                 } else
-                    dump_ch('0');
+                    add('0');
                 if (ch >= 10)
-                    dump_ch('A' + ch - 10);
+                    add('A' + ch - 10);
                 else
-                    dump_ch('0' + ch);
+                    add('0' + ch);
             }
         }
     }
+    add('"');
 }
 
-static int indent = 2; // pretty-print indentation
-
-bool dump_value(minion_value source, int depth);
-
-void dump_pad(
-    int n)
+void DumpBuffer::dump_pad()
 {
-    if (n >= 0) {
-        dump_ch('\n');
-        while (n > 0) {
-            dump_ch(' ');
-            --n;
+    if (depth >= 0) {
+        add('\n');
+        for (int i = 0; i < depth * indent; ++i)
+            add(' ');
+    }
+}
+
+void DumpBuffer::dump_list(
+    MList& source)
+{
+    add('[');
+    int len = source.size();
+    if (len != 0) {
+        auto d = depth;
+        if (depth >= 0)
+            ++depth;
+        for (int i = 0; i < len; ++i) {
+            dump_pad();
+            dump_value(source.at(i));
+            add(',');
         }
+        depth = d;
+        pop();
+        dump_pad();
     }
+    add(']');
 }
 
-bool dump_list(
-    minion_value source, int depth)
+void DumpBuffer::dump_map(
+    MMap& source)
 {
-    dump_ch('[');
-    msize len = source.size;
+    add('{');
+    int len = source.size();
     if (len != 0) {
-    	int pad = -1;
-    	int new_depth = -1;
-    	if (depth >= 0)
-        	new_depth = depth + 1;
-    	pad = new_depth * indent;
-    	for (msize i = 0; i < len; ++i) {
-        	dump_pad(pad);
-        	if (!dump_value(((minion_value*) source.data)[i], new_depth))
-            	return false;
-        	dump_ch(',');
-    	}
-    	undump_ch();
-    	dump_pad(depth * indent);
+        auto d = depth;
+        if (depth >= 0)
+            ++depth;
+        for (const auto& mp : source) {
+            dump_pad();
+            dump_string(mp->first);
+            add(':');
+            if (depth >= 0)
+                add(' ');
+            dump_value(mp->second);
+            add(',');
+        }
+        depth = d;
+        pop();
+        dump_pad();
     }
-    dump_ch(']');
-    return true;
+    add('}');
 }
 
-bool dump_map(
-    minion_value source, int depth)
+void DumpBuffer::dump_value(
+    const MValue& source)
 {
-    dump_ch('{');
-    msize len = source.size;
-    if (len != 0) {
-    	int pad = -1;
-    	int new_depth = -1;
-    	if (depth >= 0)
-        	new_depth = depth + 1;
-    	pad = new_depth * indent;
-    	for (msize i = 0; i < len; ++i) {
-        	dump_pad(pad);
-        	minion_pair mp = ((minion_pair*) source.data)[i];
-        	if (mp.key.type != T_String)
-            	return false;
-        	dump_string((char*) mp.key.data);
-        	dump_ch(':');
-        	if (depth >= 0)
-            	dump_ch(' ');
-        	if (!dump_value(mp.value, new_depth))
-            	return false;
-        	dump_ch(',');
-    	}
-    	undump_ch();
-    	dump_pad(depth * indent);
-    }
-    dump_ch('}');
-    return true;
-}
-
-bool dump_value(
-    minion_value source, int depth)
-{
-    bool ok = true;
     switch (source.type) {
     case T_String:
-        // Strings don't receive any extra formatting
-        dump_string((char*) source.data);
+        dump_string(*reinterpret_cast<MString*>(source.minion_item));
         break;
-    case T_Array:
-        ok = dump_list(source, depth);
+    case T_List:
+        dump_list(*reinterpret_cast<MList*>(source.minion_item));
         break;
-    case T_PairArray:
-        ok = dump_map(source, depth);
+    case T_Map:
+        dump_map(*reinterpret_cast<MMap*>(source.minion_item));
         break;
     default:
-        ok = false;
+        throw "[BUG] MINION dump: bad MValue type";
     }
-    return ok;
 }
 
-char* minion_dump(
-    minion_value source, int depth)
+const char* DumpBuffer::dump(
+    MValue& data, int pretty)
 {
-    clear_dump_buffer();
-    if (dump_value(source, depth)) {
-        dump_ch(0);
-        return dump_buffer;
+    depth = -1;
+    if (pretty >= 0) {
+        depth = 0;
+        indent = pretty;
     }
-    return 0;
+    buffer.clear();
+    dump_value(data);
+    return buffer.c_str();
 }
+
+// *** Special MValue "constructors" ***
+
+// Build a new minion string item from the given string view.
+MValue::MValue(
+    std::string_view s)
+    : type{T_String} //, minion_item{new MString(std::string{s})}
+    , minion_item{new MString(std::string{s})}
+{}
+
+// Build a new minion list item from the given entries, which are of type
+// MValue.
+MValue::MValue(
+    std::initializer_list<MValue> items)
+    : type{T_List} //, minion_item{new MList}
+    , minion_item{new MList()}
+{
+    for (const auto& item : items) {
+        reinterpret_cast<MList*>(minion_item)->emplace_back(item);
+    }
+}
+
+// Build a new minion map from the given entries, which are string/value
+// pairs.
+MValue::MValue(
+    std::initializer_list<MPair> items)
+    : type{T_Map} //, minion_item{new MMap}
+    , minion_item{new MMap()}
+{
+    for (const auto& item : items) {
+        reinterpret_cast<MMap*>(minion_item)->emplace_back(new MPair{item});
+    }
+}
+
+bool MValue::is_null()
+{
+    return type == T_NoType;
+}
+
+MString* MValue::m_string()
+{
+    if (type == T_String)
+        return reinterpret_cast<MString*>(minion_item);
+    return nullptr;
+}
+
+MList* MValue::m_list()
+{
+    if (type == T_List)
+        return reinterpret_cast<MList*>(minion_item);
+    return nullptr;
+}
+
+MMap* MValue::m_map()
+{
+    if (type == T_Map)
+        return reinterpret_cast<MMap*>(minion_item);
+    return nullptr;
+}
+
+} // End of namespace minion

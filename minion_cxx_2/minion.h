@@ -98,75 +98,14 @@ struct MinionValue : public MValue
     }
 };
 
-class MString
-{
-    std::string data;
+class MString : public std::string
+{};
 
-public:
-    MString() = default;
-    MString(
-        std::string_view s)
-    {
-        data = s;
-    }
-    std::string_view data_view() { return data; }
-};
+class MList : public std::vector<MValue>
+{};
 
-class MList
-{
-    std::vector<MValue> data;
-
-public:
-    size_t size() { return data.size(); }
-    void add(
-        MValue m)
-    {
-        data.emplace_back(m);
-    }
-    MValue& get(
-        size_t index)
-    {
-        return data.at(index);
-    }
-};
-
-class MMap
-{
-    std::vector<MPair> data;
-
-public:
-    size_t size() { return data.size(); }
-    void add(
-        MPair m)
-    {
-        data.emplace_back(m);
-    }
-    MPair& get_pair(
-        size_t index)
-    {
-        return data.at(index);
-    }
-    int search(
-        std::string_view key)
-    {
-        int i = 0;
-        for (auto& mp : data) {
-            if (mp.first == key)
-                return i;
-            ++i;
-        }
-        return -1;
-    }
-    MValue get(
-        std::string_view key)
-    {
-        for (auto& mp : data) {
-            if (mp.first == key)
-                return mp.second;
-        }
-        return {};
-    }
-};
+class MMap : public std::vector<MPair*>
+{};
 
 class InputBuffer
 {
@@ -260,11 +199,9 @@ class DumpBuffer
         buffer.push_back(ch);
     }
     void pop() { buffer.pop_back(); }
-    void dump_value(MValue& source);
-    void dump_string(std::string_view source);
-    void dump_string(MValue& source);
-    //void dump_list(MList& source);
-    void dump_list(MValue& source);
+    void dump_value(const MValue& source);
+    void dump_string(const std::string& source);
+    void dump_list(MList& source);
     void dump_map(MMap& source);
     void dump_pad();
 

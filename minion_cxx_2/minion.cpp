@@ -67,30 +67,27 @@ void MValue::mcopy(
 {
     switch (type) {
     case T_String:
-        m = MValue(m.m_string()->data_view());
+        m = MValue(T_String, new MString(*reinterpret_cast<MString*>(minion_item)));
         break;
     case T_List: {
         auto mlist = new MList;
         m = {T_List, mlist};
-        auto ml = m.m_list();
-        size_t len = ml->size();
-        for (size_t i = 0; i < len; ++i) {
-            mlist->add({});
-            MValue& mref = mlist->get(i);
-            ml->get(i).mcopy(mref);
+        auto ml = reinterpret_cast<MList*>(minion_item);
+        for (auto& v : *ml) {
+            mlist->emplace_back(MValue{});
+            MValue& mref = (*mlist)[mlist->size() - 1];
+            v.mcopy(mref);
         }
         break;
     };
     case T_Map: {
         auto mmap = new MMap;
         m = {T_Map, mmap};
-        auto mm = m.m_map();
-        size_t len = mm->size();
-        for (size_t i = 0; i < len; ++i) {
-            MPair& mp0 = mm->get_pair(i);
-            mmap->add({mp0.first, {}});
-            MValue& mref = mmap->get_pair(i).second;
-            mp0.second.mcopy(mref);
+        auto mm = reinterpret_cast<MMap*>(minion_item);
+        for (auto& mp : *mm) {
+            auto mpair = new MPair(mp->first, {});
+            mmap->emplace_back(mpair);
+            mp->second.mcopy(mpair->second);
         }
         break;
     };
@@ -106,19 +103,20 @@ void MValue::free()
         return;
     switch (type) {
     case T_String:
-        delete m_string();
+        delete reinterpret_cast<MString*>(minion_item);
         break;
     case T_List: {
-        auto ml = m_list();
-        for (size_t i = 0; i < ml->size(); ++i) {
-            ml->get(i).free(); // delete the entry value
+        auto ml = reinterpret_cast<MList*>(minion_item);
+        for (auto& v : *ml) {
+            v.free(); // delete the entry value
         }
         delete ml; // delete the vector
     } break;
     case T_Map:
-        auto mm = m_map();
-        for (size_t i = 0; i < mm->size(); ++i) {
-            mm->get_pair(i).second.free();
+        auto mm = reinterpret_cast<MMap*>(minion_item);
+        for (auto& mp : *mm) {
+            mp->second.free(); // delete the entry value
+            delete mp;         // delete the entry (including the key)
         }
         delete mm; // delete the vector
         break;
@@ -419,7 +417,7 @@ void InputBuffer::get_item(
 
                 case T_List: // list value
                     get_bare_string(ch);
-                    reinterpret_cast<MList*>(mvalue.minion_item)->add(get_macro(ch_buffer));
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(get_macro(ch_buffer));
                     expect = Expect_Comma;
                     continue;
 
@@ -446,7 +444,7 @@ void InputBuffer::get_item(
                 case T_List: // list value
                 {
                     MValue m = {T_List, new MList()};
-                    reinterpret_cast<MList*>(mvalue.minion_item)->add(m);
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(m);
                     get_item(m);
                     expect = Expect_Comma;
                     continue;
@@ -483,7 +481,7 @@ void InputBuffer::get_item(
                 case T_List: // list value
                 {
                     MValue m = {T_Map, new MMap()};
-                    reinterpret_cast<MList*>(mvalue.minion_item)->add(m);
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(m);
                     get_item(m);
                     expect = Expect_Comma;
                     continue;
@@ -560,16 +558,16 @@ void InputBuffer::get_item(
                                   .append(" ... current position ")
                                   .append(pos(here())));
                     }
-                    auto mm = mvalue.m_map();
-                    mm->add({ch_buffer, {}});
-                    MValue& m = mm->get_pair(mm->size() - 1).second;
+                    auto mp = new MPair(ch_buffer, {});
+                    reinterpret_cast<MMap*>(mvalue.minion_item)->emplace_back(mp);
+                    MValue m = {T_Pair, mp};
                     get_item(m, Expect_Colon);
                     expect = Expect_Comma;
                     continue;
                 }
                 case T_List: // list value
                     get_string(ch);
-                    reinterpret_cast<MList*>(mvalue.minion_item)->add(MValue{ch_buffer});
+                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(ch_buffer);
                     expect = Expect_Comma;
                     continue;
                 case T_Pair: // map value                {
@@ -711,16 +709,7 @@ const char* InputBuffer::read(
 }
 
 void DumpBuffer::dump_string(
-    MValue& source)
-{
-    auto s = source.m_string();
-    if (s)
-        dump_string(s->data_view());
-    //TODO: handle error
-}
-
-void DumpBuffer::dump_string(
-    std::string_view source)
+    const std::string& source)
 {
     add('"');
     for (unsigned char ch : source) {
@@ -794,21 +783,17 @@ void DumpBuffer::dump_pad()
 }
 
 void DumpBuffer::dump_list(
-    MValue& source)
+    MList& source)
 {
     add('[');
-
-    auto l = source.m_list();
-    int len = l->size();
-
-    //int len = source.size();
+    int len = source.size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
             ++depth;
         for (int i = 0; i < len; ++i) {
             dump_pad();
-            dump_value(l->get(i));
+            dump_value(source.at(i));
             add(',');
         }
         depth = d;
@@ -844,14 +829,14 @@ void DumpBuffer::dump_map(
 }
 
 void DumpBuffer::dump_value(
-    MValue& source)
+    const MValue& source)
 {
     switch (source.type) {
     case T_String:
-        dump_string(source);
+        dump_string(*reinterpret_cast<MString*>(source.minion_item));
         break;
     case T_List:
-        dump_list(source);
+        dump_list(*reinterpret_cast<MList*>(source.minion_item));
         break;
     case T_Map:
         dump_map(*reinterpret_cast<MMap*>(source.minion_item));
@@ -880,7 +865,7 @@ const char* DumpBuffer::dump(
 MValue::MValue(
     std::string_view s)
     : type{T_String} //, minion_item{new MString(std::string{s})}
-    , minion_item{new MString(s)}
+    , minion_item{new MString(std::string{s})}
 {}
 
 // Build a new minion list item from the given entries, which are of type
@@ -891,7 +876,7 @@ MValue::MValue(
     , minion_item{new MList()}
 {
     for (const auto& item : items) {
-        reinterpret_cast<MList*>(minion_item)->add(item);
+        reinterpret_cast<MList*>(minion_item)->emplace_back(item);
     }
 }
 

@@ -46,13 +46,14 @@ struct MValue
     MValue(std::initializer_list<MValue> items);
     MValue(std::initializer_list<MPair> items);
 
-    bool is_null();
+    bool is_null() { return type == 0; }
 
     MString* m_string();
     MList* m_list();
     MMap* m_map();
 
     void copy(MinionValue& m); // deep copy function
+    MValue map_search(std::string_view key);
 
 protected:
     void free();

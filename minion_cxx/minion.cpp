@@ -332,16 +332,6 @@ MValue InputBuffer::get_macro(
     return m;
 }
 
-MValue* map_search(
-    MMap* mmap, std::string_view key)
-{
-    for (auto& mp : *mmap) {
-        if (mp->first == key)
-            return &mp->second;
-    }
-    return nullptr;
-}
-
 /* Read the next "item" from the input.
  * Return the minion_type of the item read, which may be a string, a
  * macro name, an "array" (list) or an "object" (map). If the input is
@@ -562,15 +552,14 @@ void InputBuffer::get_item(
                 {
                     get_string(ch);
                     // check that the key is unique
-                    auto mm = reinterpret_cast<MMap*>(mvalue.minion_item);
-                    if (map_search(mm, ch_buffer)) {
+                    if (!mvalue.map_search(ch_buffer).is_null()) {
                         error(std::string("Map key has already been defined: ")
                                   .append(ch_buffer)
                                   .append(" ... current position ")
                                   .append(pos(here())));
                     }
                     auto mp = new MPair(ch_buffer, {});
-                    mm->emplace_back(mp);
+                    reinterpret_cast<MMap*>(mvalue.minion_item)->emplace_back(mp);
                     MValue m = {T_Pair, mp};
                     get_item(m, Expect_Colon);
                     expect = Expect_Comma;
@@ -903,11 +892,6 @@ MValue::MValue(
     }
 }
 
-bool MValue::is_null()
-{
-    return type == T_NoType;
-}
-
 MString* MValue::m_string()
 {
     if (type == T_String)
@@ -927,6 +911,20 @@ MMap* MValue::m_map()
     if (type == T_Map)
         return reinterpret_cast<MMap*>(minion_item);
     return nullptr;
+}
+
+// If the item is a map and if it has an entry with the given key,
+// return the value of that entry. Otherwise return a null value.
+MValue MValue::map_search(
+    std::string_view key)
+{
+    if (type == T_Map) {
+        for (auto& mp : *reinterpret_cast<MMap*>(minion_item)) {
+            if (mp->first == key)
+                return mp->second;
+        }
+    }
+    return {};
 }
 
 } // End of namespace minion

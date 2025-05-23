@@ -25,12 +25,12 @@ struct position
     size_t byte_ix;
 };
 
-// *** forward declarations ***
+// forward declarations
 struct MValue;
+using MPair = std::pair<std::string, MValue>;
 struct MinionValue;
 class InputBuffer;
 class DumpBuffer;
-using MPair = std::pair<std::string, MValue>;
 class MString;
 class MList;
 class MMap;
@@ -57,7 +57,6 @@ struct MValue
 protected:
     void free();
 
-    //protected:
     int type{0};
     bool not_owner{false};
     void* minion_item{nullptr};
@@ -68,8 +67,6 @@ protected:
         , not_owner{o}
         , minion_item{p}
     {}
-
-    MValue unowned() { return MValue(type, minion_item, true); }
 
     void mcopy(MValue& m); // used by copy method
 };
@@ -85,6 +82,19 @@ struct MinionValue : public MValue
     }
 
     ~MinionValue() { free(); }
+
+    MinionValue& operator=(
+        const MinionValue& source)
+    {
+        // self-assignment check
+        if (this != &source) {
+            this->free();
+            type = source.type;
+            minion_item = source.minion_item;
+            not_owner = false;
+        }
+        return *this;
+    }
 };
 
 class MString : public std::string
@@ -98,15 +108,9 @@ class MMap : public std::vector<MPair*>
 
 class InputBuffer
 {
-    //TODO--
-public:
-    //--
 
     class MacroMap
     {
-        //TODO--
-    public:
-        //--
         std::forward_list<MPair> macros;
 
     public:
@@ -154,7 +158,6 @@ public:
 
     MValue get_macro(std::string& s);
 
-    //MinionValue data;
 
     std::string_view input;
     size_t ch_index;
@@ -163,6 +166,7 @@ public:
     std::string ch_buffer; // for reading strings
 
     MacroMap macro_map;
+    std::string error_message;
 
     char read_ch(bool instring);
     void unread_ch();
@@ -177,10 +181,9 @@ public:
     void get_string(char ch);
     void get_bare_string(char ch);
     bool add_unicode_to_ch_buffer(int len);
-    //void get_map_value(MValue& mvalue);
 
 public:
-    std::string read(MinionValue& data, std::string_view s);
+    const char* read(MinionValue& data, std::string_view s);
 };
 
 class DumpBuffer

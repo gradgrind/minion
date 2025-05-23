@@ -62,7 +62,6 @@ void MValue::copy(
     mcopy(m);
 }
 
-//TODO with diagnostics?
 void MValue::mcopy(
     MValue& m)
 {
@@ -682,7 +681,7 @@ MinionValue Minion::new_map(std::initializer_list<map_item> items)
 }
 */
 
-std::string InputBuffer::read(
+const char* InputBuffer::read(
     MinionValue& data, std::string_view input_string)
 {
     // Prepare input buffer
@@ -700,7 +699,8 @@ std::string InputBuffer::read(
     } catch (MinionError& e) {
         data.free();
         macro_map.clear();
-        return e.what();
+        error_message = e.what();
+        return error_message.c_str();
     }
 
     /*
@@ -712,7 +712,7 @@ std::string InputBuffer::read(
     */
 
     macro_map.clear();
-    return {};
+    return nullptr;
 }
 
 void DumpBuffer::dump_string(

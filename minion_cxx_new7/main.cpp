@@ -16,7 +16,7 @@ int main()
         //"../data/test2e.minion",
         "../data/test3.minion",
         "../data/test4.minion",
-        "../data/test4e.minion"
+        //"../data/test4e.minion"
         //
     };
 
@@ -26,7 +26,9 @@ int main()
 
     InputBuffer miniondata;
 
-    for (int count = 0; count < 10000; ++count) {
+    MinionValue m;
+
+    for (int count = 0; count < 10; ++count) {
         for (const auto& fp : fplist) {
             const char* f = read_file(fp);
             if (!f) {
@@ -37,12 +39,11 @@ int main()
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
-            {
-                MinionValue m;
-                miniondata.read(m, indata);
+            miniondata.read(m, indata);
 
-                clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
-            }
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
+
+            m = {};
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current time
 
@@ -57,17 +58,17 @@ int main()
         printf("  - - - - -\n");
     }
 
-    MinionValue m;
+    //MinionValue m;
     auto perror = miniondata.read(m, indata);
-    if (perror.empty()) {
+    if (perror) {
+        printf("PARSE ERROR: %s\n", perror);
+    } else {
         DumpBuffer dump_buffer;
         const char* result = dump_buffer.dump(m, 2);
         if (result)
             printf("\n -->\n%s\n", result);
         else
             printf("*** Dump failed\n");
-    } else {
-        printf("PARSE ERROR: %s\n", perror.c_str());
     }
 
     return 0;

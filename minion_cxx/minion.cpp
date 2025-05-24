@@ -86,20 +86,11 @@ void MValue::mcopy(
 {
     switch (type) {
     case T_String:
-        m = MValue(m.m_string()->data_view());
+        m = new MString(*m_string());
         break;
-    case T_List: {
-        auto mlist = new MList;
-        m = {T_List, mlist};
-        auto ml = m.m_list();
-        size_t len = ml->size();
-        for (size_t i = 0; i < len; ++i) {
-            mlist->add({});
-            MValue& mref = mlist->get(i);
-            ml->get(i).mcopy(mref);
-        }
+    case T_List:
+        m = new MList(*m_list());
         break;
-    };
     case T_Map: {
         auto mmap = new MMap;
         m = {T_Map, mmap};
@@ -134,8 +125,6 @@ void MValue::free()
         delete m_map();
         break;
     }
-    //type = T_NoType;
-    //minion_item = nullptr;
 }
 
 // Represent number as a string with hexadecimal digits, at least minwidth.
@@ -451,7 +440,7 @@ void InputBuffer::get_item(
             if (expect == Expect_Value) {
                 switch (mvalue.type) {
                 case T_NoType: // top-level value
-                    mvalue = {T_List, new MList()};
+                    mvalue = new MList();
                     get_item(mvalue);
                     // No further input expected
                     expect = Expect_End;
@@ -459,7 +448,7 @@ void InputBuffer::get_item(
 
                 case T_List: // list value
                 {
-                    MValue m = {T_List, new MList()};
+                    MValue m = new MList();
                     mvalue.m_list()->add(m);
                     get_item(m);
                     expect = Expect_Comma;
@@ -468,14 +457,14 @@ void InputBuffer::get_item(
 
                 case T_Pair: // map value                {
                 {
-                    mvalue = {T_List, new MList()};
+                    mvalue = new MList();
                     get_item(mvalue);
                     return;
                 }
 
                 case T_Macro: // top-level, macro value definition
                 {
-                    mvalue = {T_List, new MList()};
+                    mvalue = new MList();
                     get_item(mvalue);
                     return;
                 }
@@ -558,7 +547,7 @@ void InputBuffer::get_item(
                 switch (mvalue.type) {
                 case T_NoType: // top-level value
                     get_string(ch);
-                    mvalue = MValue(ch_buffer);
+                    mvalue = new MString(ch_buffer);
                     // No further input expected
                     expect = Expect_End;
                     continue;
@@ -581,16 +570,16 @@ void InputBuffer::get_item(
                 }
                 case T_List: // list value
                     get_string(ch);
-                    mvalue.m_list()->add(MValue{ch_buffer});
+                    mvalue.m_list()->add(new MString{ch_buffer});
                     expect = Expect_Comma;
                     continue;
                 case T_Pair: // map value                {
                     get_string(ch);
-                    mvalue = MValue(ch_buffer);
+                    mvalue = new MString(ch_buffer);
                     return;
                 case T_Macro:
                     get_string(ch);
-                    mvalue = MValue(ch_buffer);
+                    mvalue = new MString(ch_buffer);
                     return;
                 }
             }
@@ -642,48 +631,6 @@ bool InputBuffer::add_unicode_to_ch_buffer(
     return true;
 }
 
-// *** Serializing MINION ***
-
-/* Some allocated memory can be retained between minion_read calls,
- * but it should probably be freed sometime, if it is really no
- * longer needed.
-*/
-
-// Build a new minion list item from the arguments, which are MinionValues.
-// The source data (referenced by the data fields) is not copied, thus
-// the new list takes on ownership if the "not-owner" flags of the data
-// are clear.
-/*
-MinionValue Minion::new_array(std::initializer_list<MinionValue> items)
-{
-    auto start_index = remembered_items_index;
-    for (const auto& item : items) {
-        remember(item);
-    }
-    auto m = MinionValue(&remembered_items[start_index],
-        remembered_items_index - start_index, false);
-    remembered_items_index = start_index;
-    return m;
-}
-
-// Build a new minion map from the given minion_map items.
-// The source data of the value items (referenced by the data fields) is
-// not copied, thus the new map takes on ownership if the "not-owner" flags
-// of the data are clear.
-MinionValue Minion::new_map(std::initializer_list<map_item> items)
-{
-    auto start_index = remembered_items_index;
-    for (const auto& item : items) {
-        remember(item.key);
-        remember(item.value);
-    }
-    auto m = MinionValue(&remembered_items[start_index],
-        remembered_items_index - start_index, true);
-    remembered_items_index = start_index;
-    return m;
-}
-*/
-
 const char* InputBuffer::read(
     MinionValue& data, std::string_view input_string)
 {
@@ -723,12 +670,9 @@ const char* InputBuffer::read(
 }
 
 void DumpBuffer::dump_string(
-    MValue& source)
+    MString& source)
 {
-    auto s = source.m_string();
-    if (s)
-        dump_string(s->data_view());
-    //TODO: handle error
+    dump_string(source.data_view());
 }
 
 void DumpBuffer::dump_string(
@@ -806,18 +750,17 @@ void DumpBuffer::dump_pad()
 }
 
 void DumpBuffer::dump_list(
-    MValue& source)
+    MList& source)
 {
     add('[');
-    auto l = source.m_list();
-    int len = l->size();
+    int len = source.size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
             ++depth;
         for (int i = 0; i < len; ++i) {
             dump_pad();
-            dump_value(l->get(i));
+            dump_value(source.get(i));
             add(',');
         }
         depth = d;
@@ -828,18 +771,17 @@ void DumpBuffer::dump_list(
 }
 
 void DumpBuffer::dump_map(
-    MValue& source)
+    MMap& source)
 {
     add('{');
-    auto m = source.m_map();
-    int len = m->size();
+    int len = source.size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
             ++depth;
         for (int i = 0; i < len; ++i) {
             dump_pad();
-            MPair& mp = m->get_pair(i);
+            MPair& mp = source.get_pair(i);
             dump_string(mp.first);
             add(':');
             if (depth >= 0)
@@ -859,13 +801,13 @@ void DumpBuffer::dump_value(
 {
     switch (source.type) {
     case T_String:
-        dump_string(source);
+        dump_string(*source.m_string());
         break;
     case T_List:
-        dump_list(source);
+        dump_list(*source.m_list());
         break;
     case T_Map:
-        dump_map(source);
+        dump_map(*source.m_map());
         break;
     default:
         throw "[BUG] MINION dump: bad MValue type";
@@ -887,36 +829,26 @@ const char* DumpBuffer::dump(
 
 // *** Special MValue "constructors" ***
 
-// Build a new minion string item from the given string view.
+// Build a new minion string item from the given MString*.
 MValue::MValue(
-    std::string_view s)
-    : type{T_String} //, minion_item{new MString(std::string{s})}
-    , minion_item{new MString(s)}
+    MString* m)
+    : type{T_String}
+    , minion_item{m}
 {}
 
-// Build a new minion list item from the given entries, which are of type
-// MValue.
+// Build a new minion list item from the given MList*.
 MValue::MValue(
-    std::initializer_list<MValue> items)
-    : type{T_List} //, minion_item{new MList}
-    , minion_item{new MList()}
-{
-    for (const auto& item : items) {
-        reinterpret_cast<MList*>(minion_item)->add(item);
-    }
-}
+    MList* m)
+    : type{T_List}
+    , minion_item{m}
+{}
 
-// Build a new minion map from the given entries, which are string/value
-// pairs.
+// Build a new minion map item from the given MMap*.
 MValue::MValue(
-    std::initializer_list<MPair> items)
-    : type{T_Map} //, minion_item{new MMap}
-    , minion_item{new MMap()}
-{
-    for (const auto& item : items) {
-        reinterpret_cast<MMap*>(minion_item)->add(item);
-    }
-}
+    MMap* m)
+    : type{T_Map}
+    , minion_item{m}
+{}
 
 MString* MValue::m_string()
 {

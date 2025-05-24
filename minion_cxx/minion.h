@@ -1,7 +1,6 @@
 #ifndef MINION_H
 #define MINION_H
 
-#include <forward_list>
 #include <stdexcept>
 #include <vector>
 
@@ -44,9 +43,9 @@ struct MValue
     friend DumpBuffer;
 
     MValue() = default;
-    MValue(std::string_view s);
-    MValue(std::initializer_list<MValue> items);
-    MValue(std::initializer_list<MPair> items);
+    MValue(MString* m);
+    MValue(MList* m);
+    MValue(MMap* m);
 
     bool is_null() { return type == 0; }
 
@@ -105,11 +104,11 @@ class MString
 
 public:
     MString() = default;
+
     MString(
         std::string_view s)
-    {
-        data = s;
-    }
+        : data{s}
+    {}
 
     ~MString() = default;
 
@@ -121,6 +120,27 @@ class MList
     std::vector<MValue> data;
 
 public:
+    MList() = default;
+
+    MList(
+        std::initializer_list<MValue> items)
+    {
+        for (const auto& item : items) {
+            add(item);
+        }
+    }
+
+    MList(
+        MList& source) // copy constructor
+    {
+        data.reserve(source.data.size());
+        for (auto& mv : source.data) {   // mv is reference to source element
+            data.emplace_back(MValue{}); // add null MValue
+            MValue& mref = data.back();  // get reference to added MValue
+            mv.mcopy(mref);
+        }
+    }
+
     ~MList()
     {
         for (auto& m : data) {
@@ -148,6 +168,28 @@ class MMap
     std::vector<MPair> data;
 
 public:
+    MMap() = default;
+
+    MMap(
+        std::initializer_list<MPair> items)
+    {
+        for (const auto& item : items) {
+            add(item);
+        }
+    }
+
+    MMap(
+        MMap& source) // copy constructor
+    {
+        data.reserve(source.data.size());
+        for (auto& mp : source.data) { // mv is reference to source element
+            // add pair with null MValue
+            data.emplace_back(MPair{mp.first, {}});
+            MValue& mref = data.back().second; // get reference to added MValue
+            mp.second.mcopy(mref);
+        }
+    }
+
     ~MMap() { clear(); }
 
     void clear()
@@ -240,9 +282,9 @@ class DumpBuffer
     void pop() { buffer.pop_back(); }
     void dump_value(MValue& source);
     void dump_string(std::string_view source);
-    void dump_string(MValue& source);
-    void dump_list(MValue& source);
-    void dump_map(MValue& source);
+    void dump_string(MString& source);
+    void dump_list(MList& source);
+    void dump_map(MMap& source);
     void dump_pad();
 
 public:

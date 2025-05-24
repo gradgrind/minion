@@ -23,36 +23,55 @@ const inline std::map<int, std::string> seek_message = {{T_NoType, "top-level va
                                                         {T_Macro, "macro value definition"}};
 
 /* *** Memory management ***
- * TODO ... not up to date ...
- * The Minion class manages memory allocation for MINION items and the
- * buffers needed for parsing and building them. A MinionValue is thus
- * dependent on the Minion instance used to build it.
- */
-
-/* *** Data sharing ***
- * To reduce allocations and deallocations the actual data is stored on
- * the heap and referenced by non-smart pointers. The data can then be
- * passed around, and even shared (in the case of macro substitutions)
- * without incurring extra allocations.
- * When the data is no longer needed it must be released. This is handled
- * by the FreeMinion class, which runs through all the allocated nodes
- * recursively. For this to work, all heap-allocated items which are not
- * deleted separately (e.g. by the normal C++ mechanisms) must end up
- * in the value tree, where they can be reached by the freer.
- * To avoid double freeing of shared nodes (which can arise when macros
- * are used), the freer keeps track of nodes it has already deleted.
+ *
+ * The `InputBuffer` class manages the structures used during parsing.
+ * It allows some of these to be reused when multiple source strings are
+ * parsed, to minimize memory allocation and deallocation.
+ * 
+ * The basic structure used to represent a MINION item is the `MValue`,
+ * which is basically a type field (primarily string, list or map) and
+ * a pointer to the item's data (which is allocated on the heap). To ease
+ * manipulation of these items without having to worry about allocations
+ * and deallocations, `MValue` has no destructor for the addressed data.
+ * On the other hand, care must be taken not to leak the memory allocated
+ * when such a data item is created in the first place. To alleviate this
+ * problem to some extent there is also the `MValue` subclass `MinionValue`,
+ * which is basically the same as `MValue`, but does have a destructor for
+ * all the structures it refers to directly or indirectly (via its contained
+ * lists and maps).
+ * 
+ * The parsing method `read` takes a reference to a `MinionValue` as
+ * argument, into which it then places the result of the parsing operation.
+ * Thus, the memory of a whole MINION structure is managed by the root
+ * `MinionValue`, while reading of – and even writing to – elements of this
+ * structure is done via `MValue` items.
+ *
+ * TODO: The individual data items (`MString`, `MList`, `MMap`) do have
+ * destructors, to which the destructor of `MinionValue` can delegate
+ * the deallocation.
+ * 
+ * To avoid memory leaks, especially in the case of parsing errors, all
+ * newly allocated items are immediately added "in-place" to the structure
+ * belonging to the root `MinionValue`. Thus there should never be any
+ * "floating", unowned data.
  */
 
 /* *** Macros ***
- * Macros use the shared-data feature to avoid having to copy their data.
- * Immediately after definition they are stored as normal MinionValues in
- * the data stack, and their addresses are also stored in some sort of map
- * so that they can be accessed by name. When a reference
- * to a macro is found, its MinionValue address can be got from the map.
+ * 
+ * Macros use a special flag within `MValue` to allow their data structures
+ * to be shared by all references to them. The macros are built in a
+ * separate map structure (name string -> `MValue`). When a macro is used
+ * in the MINION source, its `MValue` is (shallow) copied to the new place.
+ * Immediately after this, the special "not owner" flag is set on the
+ * `MValue` in the macro map. When the macro is used again, this flag will
+ * be copied to the new place with the `MValue`, so that the destructor
+ * will skip this node. Ownership is effectively transferred to the new
+ * place.
+ * 
+ * Should any macros remain unused, their entry in the macro map will not
+ * have the "not owner" flag set, so these entries must be deleted
+ * separately after the parsing is complete.
  */
-
-//TODO: When parsing, keep track of unused macros so that these can
-// be freed .. and maybe flagged as errors?
 
 // +++ Deep copy of MValue +++
 // This must build in-place to avoid potential memory leaks.
@@ -67,27 +86,30 @@ void MValue::mcopy(
 {
     switch (type) {
     case T_String:
-        m = MValue(T_String, new MString(*reinterpret_cast<MString*>(minion_item)));
+        m = MValue(m.m_string()->data_view());
         break;
     case T_List: {
         auto mlist = new MList;
         m = {T_List, mlist};
-        auto ml = reinterpret_cast<MList*>(minion_item);
-        for (auto& v : *ml) {
-            mlist->emplace_back(MValue{});
-            MValue& mref = (*mlist)[mlist->size() - 1];
-            v.mcopy(mref);
+        auto ml = m.m_list();
+        size_t len = ml->size();
+        for (size_t i = 0; i < len; ++i) {
+            mlist->add({});
+            MValue& mref = mlist->get(i);
+            ml->get(i).mcopy(mref);
         }
         break;
     };
     case T_Map: {
         auto mmap = new MMap;
         m = {T_Map, mmap};
-        auto mm = reinterpret_cast<MMap*>(minion_item);
-        for (auto& mp : *mm) {
-            auto mpair = new MPair(mp->first, {});
-            mmap->emplace_back(mpair);
-            mp->second.mcopy(mpair->second);
+        auto mm = m.m_map();
+        size_t len = mm->size();
+        for (size_t i = 0; i < len; ++i) {
+            MPair& mp0 = mm->get_pair(i);
+            mmap->add({mp0.first, {}});
+            MValue& mref = mmap->get_pair(i).second;
+            mp0.second.mcopy(mref);
         }
         break;
     };
@@ -103,26 +125,17 @@ void MValue::free()
         return;
     switch (type) {
     case T_String:
-        delete reinterpret_cast<MString*>(minion_item);
+        delete m_string();
         break;
-    case T_List: {
-        auto ml = reinterpret_cast<MList*>(minion_item);
-        for (auto& v : *ml) {
-            v.free(); // delete the entry value
-        }
-        delete ml; // delete the vector
-    } break;
+    case T_List:
+        delete m_list();
+        break;
     case T_Map:
-        auto mm = reinterpret_cast<MMap*>(minion_item);
-        for (auto& mp : *mm) {
-            mp->second.free(); // delete the entry value
-            delete mp;         // delete the entry (including the key)
-        }
-        delete mm; // delete the vector
+        delete m_map();
         break;
     }
-    type = T_NoType;
-    minion_item = nullptr;
+    //type = T_NoType;
+    //minion_item = nullptr;
 }
 
 // Represent number as a string with hexadecimal digits, at least minwidth.
@@ -320,15 +333,18 @@ void InputBuffer::get_string(
 }
 
 MValue InputBuffer::get_macro(
-    std::string& s)
+    std::string_view s)
 {
-    auto m = macro_map.get(s);
-    if (m.type == T_NoType) {
+    auto i = macro_map.search(s);
+    if (i < 0) {
         error(std::string("Unknown macro name: ")
                   .append(ch_buffer)
                   .append(" ... current position ")
                   .append(pos(here())));
     }
+    MValue& mp = macro_map.get_pair(i).second;
+    MValue m = mp;
+    mp.not_owner = true;
     return m;
 }
 
@@ -399,32 +415,32 @@ void InputBuffer::get_item(
                 case T_NoType: // top-level, macro key definition
                     get_bare_string(ch);
                     // check that the key is unique
-                    if (macro_map.has(ch_buffer)) {
+                    if (macro_map.search(ch_buffer) >= 0) {
                         error(std::string("Macro key has already been defined: ")
                                   .append(ch_buffer)
                                   .append(" ... current position ")
                                   .append(pos(here())));
                     }
-                    macro_map.add(ch_buffer, MValue{T_Macro, nullptr});
-                    get_item(macro_map.first_value(), Expect_Colon);
+                    macro_map.add({ch_buffer, MValue{T_Macro, nullptr}});
+                    get_item(macro_map.get_pair(macro_map.size() - 1).second, Expect_Colon);
                     expect = Expect_Comma;
                     continue;
 
                 case T_Macro: // top-level, macro value definition
                     get_bare_string(ch);
                     mvalue = get_macro(ch_buffer);
-                    return;
+                    expect = Expect_Comma;
+                    continue;
 
                 case T_List: // list value
                     get_bare_string(ch);
-                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(get_macro(ch_buffer));
+                    mvalue.m_list()->add(get_macro(ch_buffer));
                     expect = Expect_Comma;
                     continue;
 
                 case T_Pair: // map value                {
                     get_bare_string(ch);
-                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(
-                        get_macro(ch_buffer));
+                    mvalue = get_macro(ch_buffer);
                     return;
                 }
             }
@@ -444,7 +460,7 @@ void InputBuffer::get_item(
                 case T_List: // list value
                 {
                     MValue m = {T_List, new MList()};
-                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(m);
+                    mvalue.m_list()->add(m);
                     get_item(m);
                     expect = Expect_Comma;
                     continue;
@@ -452,9 +468,8 @@ void InputBuffer::get_item(
 
                 case T_Pair: // map value                {
                 {
-                    MValue m = {T_List, new MList()};
-                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(m);
-                    get_item(m);
+                    mvalue = {T_List, new MList()};
+                    get_item(mvalue);
                     return;
                 }
 
@@ -481,16 +496,15 @@ void InputBuffer::get_item(
                 case T_List: // list value
                 {
                     MValue m = {T_Map, new MMap()};
-                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(m);
+                    mvalue.m_list()->add(m);
                     get_item(m);
                     expect = Expect_Comma;
                     continue;
                 }
                 case T_Pair: // map value                {
                 {
-                    MValue m = {T_Map, new MMap()};
-                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(m);
-                    get_item(m);
+                    mvalue = {T_Map, new MMap()};
+                    get_item(mvalue);
                     return;
                 }
 
@@ -552,27 +566,27 @@ void InputBuffer::get_item(
                 {
                     get_string(ch);
                     // check that the key is unique
-                    if (!mvalue.map_search(ch_buffer).is_null()) {
+                    auto mm = mvalue.m_map();
+                    if (mm->search(ch_buffer) >= 0) {
                         error(std::string("Map key has already been defined: ")
                                   .append(ch_buffer)
                                   .append(" ... current position ")
                                   .append(pos(here())));
                     }
-                    auto mp = new MPair(ch_buffer, {});
-                    reinterpret_cast<MMap*>(mvalue.minion_item)->emplace_back(mp);
-                    MValue m = {T_Pair, mp};
+                    mm->add({ch_buffer, {T_Pair, {}}});
+                    MValue& m = mm->get_pair(mm->size() - 1).second;
                     get_item(m, Expect_Colon);
                     expect = Expect_Comma;
                     continue;
                 }
                 case T_List: // list value
                     get_string(ch);
-                    reinterpret_cast<MList*>(mvalue.minion_item)->emplace_back(ch_buffer);
+                    mvalue.m_list()->add(MValue{ch_buffer});
                     expect = Expect_Comma;
                     continue;
                 case T_Pair: // map value                {
                     get_string(ch);
-                    reinterpret_cast<MPair*>(mvalue.minion_item)->second = MValue(ch_buffer);
+                    mvalue = MValue(ch_buffer);
                     return;
                 case T_Macro:
                     get_string(ch);
@@ -680,18 +694,18 @@ const char* InputBuffer::read(
     ch_linestart = 0;
 
     // Clear result data, just to be sure ...
-    data.free();
+    data = {};
     macro_map.clear();
 
     try {
         get_item(data);
     } catch (MinionError& e) {
-        data.free();
+        data = {};
         macro_map.clear();
         error_message = e.what();
         return error_message.c_str();
     } catch (...) {
-        data.free();
+        data = {};
         macro_map.clear();
         throw;
     }
@@ -709,7 +723,16 @@ const char* InputBuffer::read(
 }
 
 void DumpBuffer::dump_string(
-    const std::string& source)
+    MValue& source)
+{
+    auto s = source.m_string();
+    if (s)
+        dump_string(s->data_view());
+    //TODO: handle error
+}
+
+void DumpBuffer::dump_string(
+    std::string_view source)
 {
     add('"');
     for (unsigned char ch : source) {
@@ -783,17 +806,18 @@ void DumpBuffer::dump_pad()
 }
 
 void DumpBuffer::dump_list(
-    MList& source)
+    MValue& source)
 {
     add('[');
-    int len = source.size();
+    auto l = source.m_list();
+    int len = l->size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
             ++depth;
         for (int i = 0; i < len; ++i) {
             dump_pad();
-            dump_value(source.at(i));
+            dump_value(l->get(i));
             add(',');
         }
         depth = d;
@@ -804,21 +828,23 @@ void DumpBuffer::dump_list(
 }
 
 void DumpBuffer::dump_map(
-    MMap& source)
+    MValue& source)
 {
     add('{');
-    int len = source.size();
+    auto m = source.m_map();
+    int len = m->size();
     if (len != 0) {
         auto d = depth;
         if (depth >= 0)
             ++depth;
-        for (const auto& mp : source) {
+        for (int i = 0; i < len; ++i) {
             dump_pad();
-            dump_string(mp->first);
+            MPair& mp = m->get_pair(i);
+            dump_string(mp.first);
             add(':');
             if (depth >= 0)
                 add(' ');
-            dump_value(mp->second);
+            dump_value(mp.second);
             add(',');
         }
         depth = d;
@@ -829,17 +855,17 @@ void DumpBuffer::dump_map(
 }
 
 void DumpBuffer::dump_value(
-    const MValue& source)
+    MValue& source)
 {
     switch (source.type) {
     case T_String:
-        dump_string(*reinterpret_cast<MString*>(source.minion_item));
+        dump_string(source);
         break;
     case T_List:
-        dump_list(*reinterpret_cast<MList*>(source.minion_item));
+        dump_list(source);
         break;
     case T_Map:
-        dump_map(*reinterpret_cast<MMap*>(source.minion_item));
+        dump_map(source);
         break;
     default:
         throw "[BUG] MINION dump: bad MValue type";
@@ -865,7 +891,7 @@ const char* DumpBuffer::dump(
 MValue::MValue(
     std::string_view s)
     : type{T_String} //, minion_item{new MString(std::string{s})}
-    , minion_item{new MString(std::string{s})}
+    , minion_item{new MString(s)}
 {}
 
 // Build a new minion list item from the given entries, which are of type
@@ -876,7 +902,7 @@ MValue::MValue(
     , minion_item{new MList()}
 {
     for (const auto& item : items) {
-        reinterpret_cast<MList*>(minion_item)->emplace_back(item);
+        reinterpret_cast<MList*>(minion_item)->add(item);
     }
 }
 
@@ -888,7 +914,7 @@ MValue::MValue(
     , minion_item{new MMap()}
 {
     for (const auto& item : items) {
-        reinterpret_cast<MMap*>(minion_item)->emplace_back(new MPair{item});
+        reinterpret_cast<MMap*>(minion_item)->add(item);
     }
 }
 
@@ -911,20 +937,6 @@ MMap* MValue::m_map()
     if (type == T_Map)
         return reinterpret_cast<MMap*>(minion_item);
     return nullptr;
-}
-
-// If the item is a map and if it has an entry with the given key,
-// return the value of that entry. Otherwise return a null value.
-MValue MValue::map_search(
-    std::string_view key)
-{
-    if (type == T_Map) {
-        for (auto& mp : *reinterpret_cast<MMap*>(minion_item)) {
-            if (mp->first == key)
-                return mp->second;
-        }
-    }
-    return {};
 }
 
 } // End of namespace minion

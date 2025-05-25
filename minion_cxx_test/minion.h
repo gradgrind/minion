@@ -235,6 +235,9 @@ public:
         }
         return {};
     }
+
+    bool get_string(std::string_view key, std::string& s);
+    bool get_int(std::string_view key, int& i);
 };
 
 class InputBuffer

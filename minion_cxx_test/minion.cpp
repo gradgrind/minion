@@ -127,6 +127,31 @@ void MValue::free()
     }
 }
 
+// Read a string as in `int` value, taking an optional context string
+// for error reports.
+int string2int(
+    std::string& s, std::string_view context = "")
+{
+    int i;
+    try {
+        size_t index;
+        i = std::stoi(s, &index, 0);
+        if (index != s.size())
+            throw "";
+    } catch (std::out_of_range) {
+        std::string msg{"Integer out of range: " + s};
+        if (!context.empty())
+            msg.append("\n  context: ").append(context);
+        throw MinionError(msg);
+    } catch (...) {
+        std::string msg{"Invalid integer: " + s};
+        if (!context.empty())
+            msg.append("\n  context: ").append(context);
+        throw MinionError(msg);
+    }
+    return i;
+}
+
 // Represent number as a string with hexadecimal digits, at least minwidth.
 std::string to_hex(
     long val, int minwidth)
@@ -820,7 +845,8 @@ const char* DumpBuffer::dump(
     depth = -1;
     if (pretty >= 0) {
         depth = 0;
-        indent = pretty;
+        if (pretty != 0)
+            indent = pretty;
     }
     buffer.clear();
     dump_value(data);
@@ -869,6 +895,31 @@ MMap* MValue::m_map()
     if (type == T_Map)
         return reinterpret_cast<MMap*>(minion_item);
     return nullptr;
+}
+
+bool MMap::get_string(
+    std::string_view key, std::string& s)
+{
+    MValue m = get(key);
+    if (m.is_null())
+        return false;
+    if (MString* ms = m.m_string()) {
+        s = ms->data_view();
+        return true;
+    }
+    std::string msg{"Map: value not string for key: "};
+    throw MinionError(msg.append(key));
+}
+
+bool MMap::get_int(
+    std::string_view key, int& i)
+{
+    std::string s;
+    if (!get_string(key, s))
+        return false;
+    std::string msg{"Map: value not string for key: "};
+    i = string2int(s, msg.append(key));
+    return true;
 }
 
 } // End of namespace minion

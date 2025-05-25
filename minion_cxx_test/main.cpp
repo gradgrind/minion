@@ -63,7 +63,7 @@ int main()
         printf("PARSE ERROR: %s\n", perror);
     } else if (!m.is_null()) {
         DumpBuffer dump_buffer;
-        const char* result = dump_buffer.dump(m, 2);
+        const char* result = dump_buffer.dump(m, 0);
         if (result)
             printf("\n -->\n%s\n", result);
         else

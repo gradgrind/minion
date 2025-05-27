@@ -3,6 +3,34 @@
 
 namespace minion {
 
+enum tokens {
+    Token_End = 0,
+    Token_StartList,
+    Token_EndList,
+    Token_StartMap,
+    Token_EndMap,
+    Token_Comma,
+    Token_Colon,
+    Token_Macro,
+    Token_String
+};
+
+const std::map<int, std::string> token_text_map{{Token_End, "end of data"},
+                                                {Token_StartList, "'['"},
+                                                {Token_EndList, "']'"},
+                                                {Token_StartMap, "'{'"},
+                                                {Token_EndMap, "'}'"},
+                                                {Token_Comma, "','"},
+                                                {Token_Colon, "':'"}};
+
+std::string InputBuffer::token_text(
+    int token)
+{
+    if (token == Token_String || token == Token_Macro)
+        return "\"" + ch_buffer + "\"";
+    return token_text_map.at(token);
+}
+
 enum minion_type {
     T_NoType = 0,
     T_String,
@@ -13,14 +41,22 @@ enum minion_type {
     T_Macro
 };
 
-enum expect_type { Expect_Value = 0, Expect_Comma, Expect_Colon, Expect_End };
+enum expect_type { Expect_Value = 0, Expect_TopLevel, Expect_Comma, Expect_Colon, Expect_End };
 
+const inline std::map<int, std::string> seek_message = {{Expect_TopLevel, "a top-level item"},
+                                                        {Expect_Value, "a minion item"},
+                                                        {Expect_Comma, "a comma"},
+                                                        {Expect_Colon, "a colon"},
+                                                        {Expect_End, ""}};
+
+/*
 const inline std::map<int, std::string> seek_message = {{T_NoType, "top-level value"},
                                                         {T_String, "string"},
                                                         {T_List, "list entry"},
                                                         {T_Map, "map entry key"},
                                                         {T_Pair, "map entry value"},
                                                         {T_Macro, "macro value definition"}};
+*/
 
 /* *** Memory management ***
  *
@@ -372,8 +408,8 @@ MValue InputBuffer::get_macro(
  * Strings (and macro names) are read into a buffer, which grows if it is
  * too small. Compound items are constructed while being read.
  */
-void InputBuffer::get_item(
-    MValue& mvalue, int expect)
+MValue InputBuffer::get_item(
+    int expect)
 {
     char ch;
     while (true) {
@@ -382,10 +418,10 @@ void InputBuffer::get_item(
 
         case 0: // end of input, no next item
             if (expect != Expect_End) {
-                error(std::string("Unexpected end of input data while reading ")
-                          .append(seek_message.at(mvalue.type)));
+                error(std::string("Unexpected end of input data while seeking ")
+                          .append(seek_message.at(expect)));
             }
-            return;
+            return {};
 
         case ' ':
         case '\n': // continue seeking start of item
@@ -396,7 +432,7 @@ void InputBuffer::get_item(
                 expect = Expect_Value;
                 continue;
             }
-            error(std::string("Unexpected ':' while reading ").append(seek_message.at(mvalue.type)));
+            error(std::string("Unexpected ':' while reading ").append(seek_message.at(expect)));
             break; // unreachable
 
         case ']':
@@ -462,41 +498,7 @@ void InputBuffer::get_item(
             break; // unreachable
 
         case '[':
-            if (expect == Expect_Value) {
-                switch (mvalue.type) {
-                case T_NoType: // top-level value
-                    mvalue = new MList();
-                    get_item(mvalue);
-                    // No further input expected
-                    expect = Expect_End;
-                    continue;
-
-                case T_List: // list value
-                {
-                    MValue m = new MList();
-                    mvalue.m_list()->add(m);
-                    get_item(m);
-                    expect = Expect_Comma;
-                    continue;
-                }
-
-                case T_Pair: // map value                {
-                {
-                    mvalue = new MList();
-                    get_item(mvalue);
-                    return;
-                }
-
-                case T_Macro: // top-level, macro value definition
-                {
-                    mvalue = new MList();
-                    get_item(mvalue);
-                    return;
-                }
-                }
-            }
-            error(std::string("Unexpected start of list ('[')"));
-            break; // unreachable
+            return Token_StartList;
 
         case '{':
             if (expect == Expect_Value) {
@@ -613,6 +615,39 @@ void InputBuffer::get_item(
     } // End of item-seeking loop
 }
 
+MValue InputBuffer::get_list()
+{
+    MList mlist;
+    while (true) {
+        switch (get_token()) {
+        case Token_EndList:
+            return mlist;
+        case Token_String: {
+            MString s{ch_buffer};
+            mlist.emplace_back(s);
+        } break;
+        case Token_StartList:
+            mlist.emplace_back(get_list());
+            break;
+        case Token_StartMap:
+            mlist.emplace_back(get_map());
+            break;
+        case Token_Macro:
+            mlist.emplace_back(get_macro(ch_buffer));
+            break;
+        }
+        auto t = get_token();
+        if (t == Token_Comma)
+            continue;
+        if (t == Token_EndList)
+            return mlist;
+        throw "Unexpected item whilst seeking list element: " + token_text(t);
+    }
+}
+
+//TODO
+MValue InputBuffer::get_map() {}
+
 // Convert a unicode code point (as hex string) to a UTF-8 string
 bool InputBuffer::add_unicode_to_ch_buffer(
     int len)
@@ -656,8 +691,8 @@ bool InputBuffer::add_unicode_to_ch_buffer(
     return true;
 }
 
-const char* InputBuffer::read(
-    MinionValue& data, std::string_view input_string)
+MValue InputBuffer::read(
+    std::string_view input_string)
 {
     // Prepare input buffer
     input = input_string;
@@ -665,19 +700,15 @@ const char* InputBuffer::read(
     line_index = 0;
     ch_linestart = 0;
 
-    // Clear result data, just to be sure ...
-    data = {};
+    // Clear macros, just to be sure ...
     macro_map.clear();
 
     try {
-        get_item(data);
+        return get_item();
     } catch (MinionError& e) {
-        data = {};
         macro_map.clear();
-        error_message = e.what();
-        return error_message.c_str();
+        return e;
     } catch (...) {
-        data = {};
         macro_map.clear();
         throw;
     }

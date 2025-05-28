@@ -60,10 +60,6 @@ public:
         : _MV{std::make_shared<MString>(s)}
     {}
     MValue(
-        std::string_view s)
-        : _MV{std::make_shared<MString>(s)}
-    {}
-    MValue(
         std::string s)
         : _MV{std::make_shared<MString>(s)}
     {}

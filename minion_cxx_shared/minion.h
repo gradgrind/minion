@@ -6,8 +6,10 @@
 #include <variant>
 #include <vector>
 
-/* The parser, Minion::read returns a single minion_value. If there is an
- * error, a MinionError exception will be thrown.
+/* The parser, InputBuffer::read returns a single MValue. If there is an
+ * error, a MinionError exception will be thrown internally and caught in
+ * InputBuffer::read, which then returns a special MValue with the error
+ * message.
  */
  
 namespace minion {
@@ -58,7 +60,15 @@ public:
         : _MV{std::make_shared<MString>(s)}
     {}
     MValue(
-        std::string& s)
+        std::string_view s)
+        : _MV{std::make_shared<MString>(s)}
+    {}
+    MValue(
+        std::string s)
+        : _MV{std::make_shared<MString>(s)}
+    {}
+    MValue(
+        const char* s)
         : _MV{std::make_shared<MString>(s)}
     {}
     MValue(

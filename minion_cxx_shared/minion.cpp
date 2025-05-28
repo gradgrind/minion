@@ -15,13 +15,13 @@ enum tokens {
     Token_String
 };
 
-const std::map<int, std::string> token_text_map{{Token_End, "end of data"},
-                                                {Token_StartList, "'['"},
-                                                {Token_EndList, "']'"},
-                                                {Token_StartMap, "'{'"},
-                                                {Token_EndMap, "'}'"},
-                                                {Token_Comma, "','"},
-                                                {Token_Colon, "':'"}};
+inline const std::map<int, std::string> token_text_map{{Token_End, "end of data"},
+                                                       {Token_StartList, "'['"},
+                                                       {Token_EndList, "']'"},
+                                                       {Token_StartMap, "'{'"},
+                                                       {Token_EndMap, "'}'"},
+                                                       {Token_Comma, "','"},
+                                                       {Token_Colon, "':'"}};
 
 std::string InputBuffer::token_text(
     int token)

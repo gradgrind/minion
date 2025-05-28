@@ -1,6 +1,0 @@
-This version uses the namespace "minion".
-It uses no global variables for deserializing or serializing, using instances of the classes InputBuffer and DumpBuffer.
-
-The basic structural node is MValue, which can be a string, a list or a map. There is also an empty value, which is not the result of a successful parse, and there are other possibilities which are used internally.
-
-This is an attempt at a more traditional recursive descent parser. It uses (at present) shared pointers to manage memory.

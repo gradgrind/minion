@@ -26,7 +26,7 @@ int main()
 
     InputBuffer miniondata;
 
-    MinionValue m;
+    MValue m;
 
     for (int count = 0; count < 10; ++count) {
         for (const auto& fp : fplist) {
@@ -39,7 +39,7 @@ int main()
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
-            miniondata.read(m, indata);
+            m = miniondata.read(indata);
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
 
@@ -58,9 +58,9 @@ int main()
         printf("  - - - - -\n");
     }
 
-    auto perror = miniondata.read(m, indata);
-    if (perror) {
-        printf("PARSE ERROR: %s\n", perror);
+    m = miniondata.read(indata);
+    if (m.type() == T_Error) {
+        printf("PARSE ERROR: %s\n", m.error_message());
     } else if (!m.is_null()) {
         DumpBuffer dump_buffer;
         const char* result = dump_buffer.dump(m, 0);

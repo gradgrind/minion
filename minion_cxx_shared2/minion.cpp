@@ -31,23 +31,7 @@ std::string Reader::token_text(
     return token_text_map.at(token);
 }
 
-/* *** Memory management ***
- *
- * The `Reader` class manages the structures used during parsing.
- * It allows some of these to be reused when multiple source strings are
- * parsed, to minimize memory allocation and deallocation.
- * 
- * The basic structure used to represent a MINION item is the `MValue`,
- * which is basically a variant containing a shared pointer (primarily
- * string, list or map).
- *
- * To avoid memory leaks, especially in the case of parsing errors, all
- * newly allocated items are immediately added "in-place" to the structure
- * belonging to the root `MValue`. Thus there should never be any
- * "floating", unowned data.
- */
-
-// Read a string as in `int` value, taking an optional context string
+// Read a string as an `int` value, taking an optional context string
 // for error reports.
 int string2int(
     std::string& s, std::string_view context = "")
@@ -566,7 +550,7 @@ Reader::Reader(
     }
 }
 
-void DumpBuffer::dump_string(
+void Writer::dump_string(
     std::string_view source)
 {
     add('"');
@@ -631,7 +615,7 @@ void DumpBuffer::dump_string(
     add('"');
 }
 
-void DumpBuffer::dump_pad()
+void Writer::dump_pad()
 {
     if (depth >= 0) {
         add('\n');
@@ -640,7 +624,7 @@ void DumpBuffer::dump_pad()
     }
 }
 
-void DumpBuffer::dump_list(
+void Writer::dump_list(
     MList& source)
 {
     add('[');
@@ -661,7 +645,7 @@ void DumpBuffer::dump_list(
     add(']');
 }
 
-void DumpBuffer::dump_map(
+void Writer::dump_map(
     MMap& source)
 {
     add('{');
@@ -687,7 +671,7 @@ void DumpBuffer::dump_map(
     add('}');
 }
 
-void DumpBuffer::dump_value(
+void Writer::dump_value(
     MValue& source)
 {
     switch (source.type()) {
@@ -705,7 +689,17 @@ void DumpBuffer::dump_value(
     }
 }
 
-const char* DumpBuffer::dump(
+std::string_view Writer::dump()
+{
+    return buffer;
+}
+
+const char* Writer::dump_c()
+{
+    return buffer.c_str();
+}
+
+Writer::Writer(
     MValue& data, int pretty)
 {
     depth = -1;
@@ -714,9 +708,7 @@ const char* DumpBuffer::dump(
         if (pretty != 0)
             indent = pretty;
     }
-    buffer.clear();
     dump_value(data);
-    return buffer.c_str();
 }
 
 bool MList::get_string(

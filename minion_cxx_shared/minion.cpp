@@ -31,7 +31,6 @@ std::string InputBuffer::token_text(
     return token_text_map.at(token);
 }
 
-//TODO
 /* *** Memory management ***
  *
  * The `InputBuffer` class manages the structures used during parsing.
@@ -39,87 +38,14 @@ std::string InputBuffer::token_text(
  * parsed, to minimize memory allocation and deallocation.
  * 
  * The basic structure used to represent a MINION item is the `MValue`,
- * which is basically a type field (primarily string, list or map) and
- * a pointer to the item's data (which is allocated on the heap). To ease
- * manipulation of these items without having to worry about allocations
- * and deallocations, `MValue` has no destructor for the addressed data.
- * On the other hand, care must be taken not to leak the memory allocated
- * when such a data item is created in the first place. To alleviate this
- * problem to some extent there is also the `MValue` subclass `MinionValue`,
- * which is basically the same as `MValue`, but does have a destructor for
- * all the structures it refers to directly or indirectly (via its contained
- * lists and maps).
- * 
- * The parsing method `read` takes a reference to a `MinionValue` as
- * argument, into which it then places the result of the parsing operation.
- * Thus, the memory of a whole MINION structure is managed by the root
- * `MinionValue`, while reading of – and even writing to – elements of this
- * structure is done via `MValue` items.
+ * which is basically a variant containing a shared pointer (primarily
+ * string, list or map).
  *
- * TODO: The individual data items (`MString`, `MList`, `MMap`) do have
- * destructors, to which the destructor of `MinionValue` can delegate
- * the deallocation.
- * 
  * To avoid memory leaks, especially in the case of parsing errors, all
  * newly allocated items are immediately added "in-place" to the structure
- * belonging to the root `MinionValue`. Thus there should never be any
+ * belonging to the root `MValue`. Thus there should never be any
  * "floating", unowned data.
  */
-
-/* +++ Deep copy of MValue +++
-// This must build in-place to avoid potential memory leaks.
-void MValue::copy(
-    MinionValue& m)
-{
-    mcopy(m);
-}
-
-void MValue::mcopy(
-    MValue& m)
-{
-    switch (type) {
-    case T_String:
-        m = new MString(*m_string());
-        break;
-    case T_List:
-        m = new MList(*m_list());
-        break;
-    case T_Map: {
-        auto mmap = new MMap;
-        m = {T_Map, mmap};
-        auto mm = m.m_map();
-        size_t len = mm->size();
-        for (size_t i = 0; i < len; ++i) {
-            MPair& mp0 = mm->get_pair(i);
-            mmap->add({mp0.first, {}});
-            MValue& mref = mmap->get_pair(i).second;
-            mp0.second.mcopy(mref);
-        }
-        break;
-    };
-    default:
-        // This is unexpected ...
-        throw "[BUG] Invalid MValue whilst copying";
-    }
-}
-
-void MValue::free()
-{
-    if (not_owner)
-        return;
-    switch (type) {
-    case T_String:
-        delete m_string();
-        break;
-    case T_List:
-        delete m_list();
-        break;
-    case T_Map:
-        delete m_map();
-        break;
-    }
-}
-*/
 
 // Read a string as in `int` value, taking an optional context string
 // for error reports.
@@ -354,7 +280,6 @@ MValue InputBuffer::get_macro(
  * If the input is invalid, a MinionError exception will be thrown,
  * containing a message.
  */
-//TODO
 int InputBuffer::get_token()
 {
     char ch;
@@ -483,7 +408,7 @@ MValue InputBuffer::get_map()
                       .append(" ... current position ")
                       .append(pos(here())));
         }
-        switch (get_token()) {
+        switch (t = get_token()) {
         case Token_String:
             mmap.emplace_back(key, ch_buffer);
             break;
@@ -593,7 +518,7 @@ MValue InputBuffer::read(
                               .append(" ... current position ")
                               .append(pos(here())));
                 }
-                switch (get_token()) {
+                switch (t = get_token()) {
                 case Token_String:
                     macro_map.emplace_back(key, ch_buffer);
                     break;
@@ -642,15 +567,6 @@ MValue InputBuffer::read(
         macro_map.clear();
         throw;
     }
-
-    /*
-    DumpBuffer d;
-    for (auto& mp : macro_map.macros) {
-        printf("&: %s\n", mp.first.c_str());
-        printf("  == %s\n\n", d.dump(mp.second));
-    }
-    */
-
     macro_map.clear();
     return m;
 }
@@ -790,7 +706,7 @@ void DumpBuffer::dump_value(
         dump_map(**source.m_map());
         break;
     default:
-        throw "[BUG] MINION dump: bad MValue type";
+        throw "[BUG] MINION dump: bad MValue type: " + std::to_string(source.type());
     }
 }
 
@@ -867,6 +783,16 @@ bool MMap::get_int(
     std::string msg{"Map, seeking integer value at key: "};
     i = string2int(s, msg.append(key));
     return true;
+}
+
+MValue::MValue(
+    std::initializer_list<MValue> items)
+    : _MV{std::make_shared<MList>()}
+{
+    auto p = std::get_if<std::shared_ptr<MList>>(this)->get();
+    for (const auto& item : items) {
+        p->emplace_back(item);
+    }
 }
 
 } // End of namespace minion

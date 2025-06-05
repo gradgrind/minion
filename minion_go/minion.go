@@ -2,123 +2,273 @@ package minion
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
-)
-
-type FlagType uint16
-
-type MinionString string
-
-func (m MinionString) Size() int {
-	return len(m)
-}
-
-type MinionArray []MinionValue
-
-func (m MinionArray) Size() int {
-	return len(m)
-}
-
-type MinionPair struct {
-	Key   MinionString
-	Value MinionValue
-}
-
-type MinionPairArray []MinionPair
-
-func (m MinionPairArray) Size() int {
-	return len(m)
-}
-
-type MinionData interface {
-	Size() int
-}
-
-type MinionValue struct {
-	Type  FlagType
-	Flags FlagType
-	Data  MinionData
-}
-
-type MinionMacros map[MinionString]MinionValue
-
-type MinionDoc struct {
-	Item   MinionValue
-	Error  string
-	Macros MinionMacros
-}
-
-const MIN_FLAG = 8
-const (
-	F_Simple_String = iota + MIN_FLAG // undelimited string
-	F_Error
-	F_Macro
-	F_Token_End
-	F_Token_String_Delim
-	F_Token_ListStart
-	F_Token_ListEnd
-	F_Token_MapStart
-	F_Token_MapEnd
-	F_Token_Comma
-	F_Token_Colon
-
-	F_NoFlags = 0
-	// This bit will be set if the data field refers to memory that this
-	// item does not "own", i.e. it shouldn't be freed.
-	F_MACRO_VALUE = 32
 )
 
 const (
 	T_NoType = iota
 	T_String
-	T_Array
-	T_PairArray
+	T_List
+	T_Map
+	T_Error
 )
 
-var (
-	// for character-by-character reading
-	ch_input     string // input string
-	ch_index     int    = 0
-	ch_linestart int    = 0
-	line_index          = 0
-
-	// read_buffer is used for constructinging strings before they are passed
-	// to minion_value items.
-	read_buffer []byte = make([]byte, 0, 100)
-
-	// dump_buffer is used for serializing a minion_value.
-	dump_buffer []byte = make([]byte, 0, 100)
-	indentation int    = 2 // pretty-print indentation
-
-	// Keep track of "unbound" minion items.
-	// The buffer for these items is used as a stack.
-	remembered_items []MinionValue = make([]MinionValue, 0, 10)
-
-	// Keep track of macros
-	macros MinionMacros
+const (
+	Token_End = iota
+	Token_StartList
+	Token_EndList
+	Token_StartMap
+	Token_EndMap
+	Token_Comma
+	Token_Colon
+	Token_Macro
+	Token_String
 )
 
+var token_text_map = map[int]string{
+	Token_End:       "end of data",
+	Token_StartList: "'['",
+	Token_EndList:   "']'",
+	Token_StartMap:  "'{'",
+	Token_EndMap:    "'}'",
+	Token_Comma:     "','",
+	Token_Colon:     "':'",
+}
+
+type MValue interface {
+	Size() int
+}
+
+type MString string
+
+func (m MString) Size() int {
+	return len(m)
+}
+
+type MList []MValue
+
+func (m MList) Size() int {
+	return len(m)
+}
+
+func (m MList) Get(index int) MValue {
+	if index >= 0 && index <= len(m) {
+		return m[index]
+	}
+	return nil
+}
+
+func (m MList) GetString(index int, s *string) bool {
+	v := m.Get(index)
+	if v != nil {
+		snew, ok := v.(MString)
+		if ok {
+			*s = string(snew)
+			return true
+		}
+		panic(fmt.Sprintf("List: expecting string at index: %d", index))
+	}
+	return false
+}
+
+func (m MList) GetInt(index int, i *int) bool {
+	v := m.Get(index)
+	if v != nil {
+		snew, ok := m[index].(MString)
+		if ok {
+			i64, err := strconv.ParseInt(string(snew), 0, 0)
+			if err != nil {
+				panic(fmt.Sprintf(
+					"List: invalid integer (%s) at index %d", snew, index))
+			}
+			*i = int(i64)
+			return true
+		}
+		panic(fmt.Sprintf("List: expecting integer at index: %d", index))
+	}
+	return false
+}
+
+type MPair struct {
+	Key   string
+	Value MValue
+}
+
+type MMap []MPair
+
+func (m MMap) Size() int {
+	return len(m)
+}
+
+func (m MMap) Get(key string) MValue {
+	for _, p := range m {
+		if p.Key == key {
+			return p.Value
+		}
+	}
+	return nil
+}
+
+func (m MMap) GetString(key string, s *string) bool {
+	v := m.Get(key)
+	if v != nil {
+		snew, ok := v.(MString)
+		if ok {
+			*s = string(snew)
+			return true
+		}
+		panic(fmt.Sprintf("Map: expecting string value for key: %s", key))
+	}
+	return false
+}
+
+func (m MMap) GetInt(key string, i *int) bool {
+	v := m.Get(key)
+	if v != nil {
+		snew, ok := v.(MString)
+		if ok {
+			i64, err := strconv.ParseInt(string(snew), 0, 0)
+			if err != nil {
+				panic(fmt.Sprintf(
+					"Map: invalid integer value (%s) for key %s", snew, key))
+			}
+			*i = int(i64)
+			return true
+		}
+		panic(fmt.Sprintf("Map: expecting integer value for key %s", key))
+	}
+	return false
+}
+
+// Used for recording read-position in input text
 type position struct {
 	line int
 	char int
 }
 
-func read_ch(instring bool) byte {
-	if ch_index == len(ch_input) {
+//type MinionMacros map[string]MValue
+
+type InputBuffer struct {
+	macro_map MMap
+
+	// for character-by-character reading
+	ch_input     string // input string
+	ch_index     int
+	ch_linestart int
+	line_index   int
+
+	// ch_buffer is used for constructinging strings before they are passed
+	// to minion_value items.
+	ch_buffer []byte //= make([]byte, 0, 100)
+}
+
+func (ib *InputBuffer) token_text(token int) string {
+	if token == Token_String || token == Token_Macro {
+		return "\"" + string(ib.ch_buffer) + "\""
+	}
+	return token_text_map[token]
+}
+
+func (ib *InputBuffer) get_macro(name string) MValue {
+	m := ib.macro_map.Get(name)
+	if m == nil {
+		ib.error(fmt.Sprintf(
+			"Unknown macro name: %s\n ... current position %s",
+			name,
+			pos(ib.here())))
+	}
+	return m
+}
+
+/* Read the next lexical "token" from the input.
+ * If it is a string or a macro name, the actual string will be available
+ * in `ch_buffer`.
+ * If the input is invalid, the function "panics", passing a message.
+ */
+func (ib *InputBuffer) get_token() int {
+	var ch byte
+	for {
+		ch = ib.read_ch(false)
+		switch ch {
+		// Act according to the next input character.
+		case 0: // end of input, no next item
+			return Token_End
+		case ' ':
+		case '\n': // continue seeking start of item
+			continue
+		case ':':
+			return Token_Colon
+		case ',':
+			return Token_Comma
+		case '[':
+			return Token_StartList
+		case ']':
+			return Token_EndList
+		case '{':
+			return Token_StartMap
+		case '}':
+			return Token_EndMap
+		case '"':
+			ib.get_string()
+			return Token_String
+		case '&': // start of macro name
+			ib.get_bare_string(ch)
+			return Token_Macro
+		case '#': // start comment
+			ch = ib.read_ch(false)
+			if ch == '[' {
+				// Extended comment: read to "]#"
+				comment_pos := ib.here()
+				ch = ib.read_ch(false)
+				for {
+					if ch == ']' {
+						ch = ib.read_ch(false)
+						if ch == '#' {
+							break
+						}
+						continue
+					}
+					if ch == 0 {
+						ib.error(fmt.Sprintf("Unterminated comment ('\\[ ...') at position %s",
+							pos(comment_pos)))
+					}
+					// Comment loop ... read next character
+					ch = ib.read_ch(false)
+				}
+				// End of extended comment
+			} else {
+				// "Normal" comment: read to end of line
+				for {
+					if ch == '\n' || ch == 0 {
+						break
+					}
+					ch = ib.read_ch(false)
+				}
+			}
+			continue // continue seeking item
+		default:
+			ib.get_bare_string(ch)
+			return Token_String
+		}
+	}
+}
+
+func (ib *InputBuffer) read_ch(instring bool) byte {
+	if ib.ch_index >= len(ib.ch_input) {
 		return 0
 	}
-	ch := ch_input[ch_index]
-	ch_index++
+	ch := ib.ch_input[ib.ch_index]
+	ib.ch_index++
 	if ch == '\n' {
-		line_index++
-		ch_linestart = ch_index
+		ib.line_index++
+		ib.ch_linestart = ib.ch_index
 		// these are not acceptable within delimited strings
 		if !instring {
 			// separator
 			return ch
 		}
-		panic(fmt.Sprintf("Unexpected newline in delimited string, line %d", line_index))
+		ib.error(fmt.Sprintf("Unexpected newline in delimited string, line %d",
+			ib.line_index))
 	} else if ch == '\r' || ch == '\t' {
 		// these are acceptable in the source, but not within strings.
 		if !instring {
@@ -128,256 +278,26 @@ func read_ch(instring bool) byte {
 	} else if ch >= 32 && ch != 127 {
 		return ch
 	}
-	panic(fmt.Sprintf("Illegal character (0x%2x) at position %s", ch, pos(here())))
+	ib.error(fmt.Sprintf("Illegal character (0x%2x) at position %s",
+		ch, pos(ib.here())))
+	return 0 // unreachable
 }
 
-func here() position {
-	return position{line_index + 1, ch_index - ch_linestart}
+func (ib *InputBuffer) unread_ch() {
+	if ib.ch_index == 0 {
+		panic("[BUG] unread_ch reached start of data")
+	}
+	ib.ch_index--
+	//NOTE: '\n' is never unread!
+}
+
+func (ib *InputBuffer) here() position {
+	return position{ib.line_index + 1, ib.ch_index - ib.ch_linestart}
 }
 
 func pos(p position) string {
 	return fmt.Sprintf("%d.%d", p.line, p.char)
 }
-
-/* Read the next "item" from the input.
- * Return the minion_Type of the item read, which may be a string, an
- * "array" (list) or an "object" (map). If the input is invalid, a
- * special "error" value will be returned, containing a message.
- * Also the structural symbols have types.
- *
- * Strings are read into a buffer, which grows if it is too small.
- * Compound items are constructed by reading their components onto a stack.
- */
-
-func get_item() FlagType {
-	var ch byte // for character-by-character reading
-	// Set read_buffer to "empty", keeping the underlying memory:
-	var result FlagType
-	read_buffer = read_buffer[:0]
-
-	for {
-		ch = read_ch(false)
-		if len(read_buffer) != 0 {
-			// An undelimited string item has already been started
-			for {
-				// Test for an item-terminating character
-				switch ch {
-				case ' ', '\n', 0:
-					//break
-				case ':', ',', ']', '}':
-					// "unread" the character
-					ch_index--
-					//break
-				case '{', '[', '\\', '"':
-					panic(fmt.Sprintf(
-						"Unexpected character ('%c') at position %s",
-						ch,
-						pos(here())))
-				default:
-					read_buffer = append(read_buffer, ch)
-					ch = read_ch(false)
-					continue
-				}
-				break
-			}
-			// Check whether macro name
-			if read_buffer[0] == '&' {
-				rstring := MinionString(read_buffer)
-				mm, ok := macros[rstring]
-				if ok {
-					// Push to remember stack, marking it as not the owner of
-					// its data
-					remembered_items = append(remembered_items,
-						MinionValue{mm.Type, mm.Flags + F_MACRO_VALUE, mm.Data})
-					result = mm.Type
-					break
-				}
-				// An undefined macro name
-				new_String(string(read_buffer), T_NoType, F_Macro)
-				result = F_Macro
-				break
-			}
-			// A String without delimiters
-			new_String(string(read_buffer), T_String, F_Simple_String)
-			result = T_String
-			break
-		}
-
-		// Look for start of next item
-		switch ch {
-		case 0:
-			result = F_Token_End // end of input, no next item
-			//break
-		case ' ', '\n':
-			continue // continue seeking start of item
-		case '#': // start comment
-			ch = read_ch(false)
-			if ch == '[' {
-				// Extended comment: read to "]#"
-				comment_pos := here()
-				ch = read_ch(false)
-				for {
-					if ch == ']' {
-						ch = read_ch(false)
-						if ch == '#' {
-							break
-						}
-						continue
-					}
-					if ch == 0 {
-						panic(fmt.Sprintf(
-							"Unterminated comment ('\\[ ...') at position %s",
-							pos(comment_pos)))
-					}
-					// Comment loop ... read next character
-					ch = read_ch(false)
-				}
-				// End of extended comment
-			} else {
-				// "Normal" comment: read to end of line
-				for {
-					if ch == '\n' || ch == 0 {
-						break
-					}
-					ch = read_ch(false)
-				}
-			}
-			continue // continue seeking item
-		case '"': // delimited string
-			result = get_string()
-			//break
-		case '[': // list
-			result = get_list()
-			//break
-		case '{': // map
-			result = get_map()
-			//break
-
-		// further structural symbols
-		case ']':
-			result = F_Token_ListEnd
-			//break
-		case '}':
-			result = F_Token_MapEnd
-			//break
-		case ':':
-			result = F_Token_Colon
-			//break
-		case ',':
-			result = F_Token_Comma
-			//break
-		default:
-			read_buffer = append(read_buffer, ch) // start undelimited string
-			continue
-		} // End of switch
-		break
-	} // End of item-seeking loop
-	return result
-}
-
-// Build a new String item from a char*. Place the result on the
-// remember stack.
-func new_String(text string, stype FlagType, sflags FlagType) {
-	m := MinionValue{stype, sflags, MinionString(text)}
-	remembered_items = append(remembered_items, m)
-}
-
-func MinionRead(input string) (doc MinionDoc, error_message string) {
-	remembered_items = remembered_items[:0]
-	macros = MinionMacros{}
-	ch_input = input
-
-	// Catch errors (panic calls)
-	defer func() {
-		if r := recover(); r != nil {
-			e, ok := r.(string)
-			if ok {
-				error_message = e
-			} else {
-				panic(r)
-			}
-		}
-	}()
-
-	doc = read_doc()
-	return doc, error_message
-}
-
-func read_doc() MinionDoc {
-	ch_index = 0
-	ch_linestart = 0
-	line_index = 0
-	var current_pos position
-	for {
-		current_pos = here()
-		mtype := get_item()
-		if mtype != F_Macro {
-			// Check for macro redefinition
-			if (remembered_items[len(remembered_items)-1].Flags & F_MACRO_VALUE) != 0 {
-				panic(fmt.Sprintf(
-					"Macro definition at position %s: name not unique",
-					pos(current_pos)))
-			} else if real_minion_value(mtype) {
-				// found document item
-				break
-			}
-			// Invalid item
-			if mtype == F_Token_End {
-				panic("Document contains no main item")
-			}
-			panic(fmt.Sprintf(
-				"Invalid minion item at position %s",
-				pos(current_pos)))
-		}
-		// *** macro name: read the definition ***
-		current_pos = here()
-		// expect ':'
-		mtype = get_item()
-		if mtype != F_Token_Colon {
-			panic(fmt.Sprintf(
-				"Expecting ':' at position %s in macro definition",
-				pos(current_pos)))
-		}
-		current_pos = here()
-		mtype = get_item()
-		// expect value
-		if real_minion_value(mtype) {
-			// expect ','
-			mtype = get_item()
-			if mtype == F_Token_Comma {
-				// Add the macro, taking on ownership of the
-				// allocated memory
-				mname := remembered_items[0].Data.(MinionString)
-				mval := remembered_items[1]
-				remembered_items = remembered_items[:0]
-				macros[mname] = mval
-				continue
-			}
-			panic(fmt.Sprintf(
-				"After macro definition: expecting ',' at position %s",
-				pos(current_pos)))
-		}
-		panic(fmt.Sprintf(
-			"In macro definition, expecting a value at position %s",
-			pos(current_pos)))
-	}
-	// "Real" minion item, not macro definition => document content
-	doc := MinionDoc{Item: remembered_items[0], Macros: macros}
-
-	// Check that there are no further items
-	current_pos = here()
-	if get_item() != F_Token_End {
-		panic(fmt.Sprintf(
-			"Position %s: unexpected item after document item",
-			pos(current_pos)))
-	}
-	return doc
-}
-
-// The "get_" family of functions reads the corresponding item from the
-// input. If the result is a minion item, that will be placed on the
-// remember stack. The "get_" functions return the type of the item that
-// was read.
 
 /* Read a delimited string (terminated by '"') from the input.
  *
@@ -386,22 +306,25 @@ func read_doc() MinionDoc {
  *
  * Escapes, introduced by '\', are possible. These are an extension of the
  * JSON escapes – see the MINION specification.
+ *
+ * The result is available in `ch_buffer`.
  */
-func get_string() FlagType {
-	start_pos := here()
-	var ch byte = 0
+func (ib *InputBuffer) get_string() {
+	ib.ch_buffer = ib.ch_buffer[:0]
+	start_pos := ib.here()
+	var ch byte
 	for {
-		ch = read_ch(true)
+		ch = ib.read_ch(true)
 		if ch == '"' {
 			break
 		}
 		if ch == 0 {
-			panic(fmt.Sprintf(
+			ib.error(fmt.Sprintf(
 				"End of data reached inside delimited string from position %s",
 				pos(start_pos)))
 		}
 		if ch == '\\' {
-			ch = read_ch(false) // '\n' etc. are permitted here
+			ch = ib.read_ch(false) // '\n' etc. are permitted here
 			switch ch {
 			case '"', '\\', '/':
 				//break
@@ -421,50 +344,182 @@ func get_string() FlagType {
 				ch = '\r'
 				//break
 			case 'u':
-				add_unicode_to_read_buffer(4)
+				ib.add_unicode_to_ch_buffer(4)
 				continue
 			case 'U':
-				add_unicode_to_read_buffer(6)
+				ib.add_unicode_to_ch_buffer(6)
 				continue
 			case '[':
 				// embedded comment, read to "\]"
 				{
-					comment_pos := here()
-					ch = read_ch(false)
+					comment_pos := ib.here()
+					ch = ib.read_ch(false)
 					for {
 						if ch == '\\' {
-							ch = read_ch(false)
+							ch = ib.read_ch(false)
 							if ch == ']' {
 								break
 							}
 							continue
 						}
 						if ch == 0 {
-							panic(fmt.Sprintf(
+							ib.error(fmt.Sprintf(
 								"End of data reached inside string comment from position %s",
 								pos(comment_pos)))
 						}
 						// loop with next character
-						ch = read_ch(false)
+						ch = ib.read_ch(false)
 					}
 				}
 				continue // comment ended, seek next character
 			default:
-				panic(fmt.Sprintf(
+				ib.error(fmt.Sprintf(
 					"Illegal string escape at position %s",
-					pos(here())))
+					pos(ib.here())))
 			}
 		}
-		read_buffer = append(read_buffer, ch)
+		ib.ch_buffer = append(ib.ch_buffer, ch)
 	}
-	new_String(string(read_buffer), T_String, F_NoFlags)
-	return T_String
 }
 
-func add_unicode_to_read_buffer(l int) {
+// This version reads a non-delimited string.
+// The result is available in `ch_buffer`.
+func (ib *InputBuffer) get_bare_string(ch byte) {
+	ib.ch_buffer = ib.ch_buffer[:0]
+	for {
+		ib.ch_buffer = append(ib.ch_buffer, ch)
+		ch = ib.read_ch(false)
+		switch ch {
+		case ':', ',', ']', '}':
+			ib.unread_ch()
+			return
+		case ' ', '\n', 0:
+			return
+		case '{', '[', '\\', '"':
+			ib.error(fmt.Sprintf(
+				"Unexpected character ('%c') at position %s",
+				ch,
+				pos(ib.here())))
+		}
+	}
+}
+
+func (ib *InputBuffer) last_n_chars(n int) string {
+	ch_start := 0
+	recent := ib.ch_index
+	if recent > n {
+		ch_start = ib.ch_index - n
+		// Find start of utf-8 sequence
+		for {
+			ch := ib.ch_input[ch_start]
+			if ch < 0x80 || (ch >= 0xC0 && ch < 0xF8) {
+				break
+			}
+			ch_start++
+		}
+	}
+	return ib.ch_input[ch_start:ib.ch_index]
+}
+
+func (ib *InputBuffer) error(msg string) {
+	// Add most recently read characters
+	panic(msg + "\n ... " + ib.last_n_chars(80))
+}
+
+func (ib *InputBuffer) get_list() MValue {
+	var mlist MList
+	for {
+		t := ib.get_token()
+		switch t {
+		case Token_EndList:
+			return mlist
+		case Token_String:
+			mlist = append(mlist, MString(ib.ch_buffer))
+			//break
+		case Token_StartList:
+			mlist = append(mlist, ib.get_list())
+			//break
+		case Token_StartMap:
+			mlist = append(mlist, ib.get_map())
+			//break
+		case Token_Macro:
+			mlist = append(mlist, ib.get_macro(string(ib.ch_buffer)))
+			//break
+		default:
+			ib.error(fmt.Sprintf(
+				"Unexpected item whilst seeking list element: %s\n ... current position %s",
+				ib.token_text(t), pos(ib.here())))
+		}
+		t = ib.get_token()
+		if t == Token_Comma {
+			continue
+		}
+		if t == Token_EndList {
+			return mlist
+		}
+		ib.error(fmt.Sprintf(
+			"Unexpected item whilst seeking comma in list: %s\n ... current position %s",
+			ib.token_text(t), pos(ib.here())))
+	}
+}
+
+func (ib *InputBuffer) get_map() MValue {
+	var mmap MMap
+	var key string
+	for {
+		t := ib.get_token()
+		if t != Token_String {
+			if t == Token_EndMap {
+				return mmap
+			}
+			ib.error(fmt.Sprintf(
+				"Unexpected item whilst seeking map element key: %s\n ... current position %s",
+				ib.token_text(t), pos(ib.here())))
+		}
+		key = string(ib.ch_buffer)
+		t = ib.get_token()
+		if t != Token_Colon {
+			ib.error(fmt.Sprintf(
+				"Unexpected item whilst seeking map element colon: %s\n ... current position %s",
+				ib.token_text(t), pos(ib.here())))
+		}
+		t = ib.get_token()
+		switch t {
+		case Token_String:
+			mmap = append(mmap, MPair{key, MString(ib.ch_buffer)})
+			//break
+		case Token_StartList:
+			mmap = append(mmap, MPair{key, ib.get_list()})
+			//break
+		case Token_StartMap:
+			mmap = append(mmap, MPair{key, ib.get_map()})
+			//break
+		case Token_Macro:
+			mmap = append(mmap, MPair{key, ib.get_macro(string(ib.ch_buffer))})
+			//break
+		default:
+			ib.error(fmt.Sprintf(
+				"Unexpected item whilst seeking map element value: %s\n ... current position %s",
+				ib.token_text(t), pos(ib.here())))
+		}
+		t = ib.get_token()
+		if t == Token_Comma {
+			continue
+		}
+		if t == Token_EndMap {
+			return mmap
+		}
+		ib.error(fmt.Sprintf(
+			"Unexpected item whilst seeking comma in map: %s\n ... current position %s",
+			ib.token_text(t), pos(ib.here())))
+	}
+}
+
+// Convert a unicode code point (as hex string) to a UTF-8 string
+func (ib *InputBuffer) add_unicode_to_ch_buffer(l int) {
 	buf := make([]byte, l)
 	for i := range l {
-		buf[i] = read_ch(false)
+		buf[i] = ib.read_ch(true)
 	}
 	number, err := strconv.ParseUint(string(buf), 16, 0) // Parse as base 16
 	if err == nil {
@@ -472,293 +527,257 @@ func add_unicode_to_read_buffer(l int) {
 		// Check validity (if invalid, the string will be "\uFFFD")
 		if s != "\uFFFD" {
 			// Add new character to read_buffer
-			read_buffer = append(read_buffer, s...)
+			ib.ch_buffer = append(ib.ch_buffer, s...)
 			return
 		}
 	}
-	panic(fmt.Sprintf(
+	ib.error(fmt.Sprintf(
 		"Invalid Unicode escape in string, position %s",
-		pos(here())))
+		pos(ib.here())))
 }
 
-func real_minion_value(mtype FlagType) bool {
-	return (mtype != T_NoType && mtype < MIN_FLAG)
-}
+func (ib *InputBuffer) Read(input_string string) (val MValue, error_message string) {
+	// Prepare input buffer
+	ib.ch_input = input_string
+	ib.ch_index = 0
+	ib.line_index = 0
+	ib.ch_linestart = 0
 
-func get_list() FlagType {
-	start_index := len(remembered_items)
-	current_pos := here()
-	mtype := get_item()
-	for {
-		// ',' before the closing bracket is allowed
-		if mtype == F_Token_ListEnd {
-			break
-		}
-		if real_minion_value(mtype) {
-			current_pos = here()
-			mtype = get_item()
-			if mtype == F_Token_ListEnd {
-				break
+	// Clear macros, just to be sure ...
+	clear(ib.macro_map)
+
+	// Catch errors (panic calls)
+	defer func() {
+		clear(ib.macro_map)
+		if r := recover(); r != nil {
+			e, ok := r.(string)
+			if ok {
+				error_message = e
+			} else {
+				panic(r)
 			}
-			if mtype == F_Token_Comma {
-				current_pos = here()
-				mtype = get_item()
+		}
+	}()
+
+	val = ib.read_val()
+	return val, error_message
+}
+
+func (ib *InputBuffer) read_val() MValue {
+	var m MValue
+	var key string
+	for {
+		t := ib.get_token()
+		switch t {
+		case Token_String:
+			m = MString(ib.ch_buffer)
+			//break
+		case Token_StartList:
+			m = ib.get_list()
+			//break
+		case Token_StartMap:
+			m = ib.get_map()
+			//break
+		case Token_Macro:
+			key = string(ib.ch_buffer)
+			t = ib.get_token()
+			if t != Token_Colon {
+				ib.error(fmt.Sprintf(
+					"Unexpected item whilst seeking macro definition colon: %s\n ... current position %s",
+					ib.token_text(t), pos(ib.here())))
+			}
+			t = ib.get_token()
+			switch t {
+			case Token_String:
+				ib.macro_map = append(ib.macro_map, MPair{key, MString(ib.ch_buffer)})
+				//break
+			case Token_StartList:
+				ib.macro_map = append(ib.macro_map, MPair{key, ib.get_list()})
+				//break
+			case Token_StartMap:
+				ib.macro_map = append(ib.macro_map, MPair{key, ib.get_map()})
+				//break
+			case Token_Macro:
+				ib.macro_map = append(ib.macro_map, MPair{key, ib.get_macro(string(ib.ch_buffer))})
+				//break
+			default:
+				ib.error(fmt.Sprintf(
+					"Unexpected item whilst seeking macro definition value: %s\n ... current position %s",
+					ib.token_text(t), pos(ib.here())))
+			}
+			t = ib.get_token()
+			if t == Token_Comma {
 				continue
 			}
-			panic(fmt.Sprintf(
-				"Reading list, expecting ',' or ']' at position %s",
-				pos(current_pos)))
+			ib.error(fmt.Sprintf(
+				"Expecting comma after macro definition, unexpected item: %s\n ... current position %s",
+				ib.token_text(t), pos(ib.here())))
+			//break
+		default:
+			ib.error(fmt.Sprintf(
+				"Unexpected item whilst seeking top-level element: %s\n ... current position %s",
+				ib.token_text(t), pos(ib.here())))
 		}
-		if mtype == F_Macro {
-			panic(fmt.Sprintf(
-				"Undefined macro name at position %s",
-				pos(current_pos)))
-		} else {
-			panic(fmt.Sprintf(
-				"Expecting list item or ']' at position %s",
-				pos(current_pos)))
-		}
-	}
-	new_Array(start_index)
-	return T_Array
-}
-
-// Build a new Array item from items on the stack, the starting index
-// being passed as argument.
-// Place the result on the remember stack.
-func new_Array(start_index int) {
-	m := slices.Clone(remembered_items[start_index:])
-	remembered_items = remembered_items[:start_index+1]
-	remembered_items[start_index] = MinionValue{T_Array, F_NoFlags, MinionArray(m)}
-}
-
-// *** Handle the map type as PairArray
-func (m *MinionPairArray) Find(key MinionString) (MinionValue, bool) {
-	for _, v := range *m {
-		if v.Key == key {
-			return v.Value, true
-		}
-	}
-	return MinionValue{}, false
-}
-
-func get_map() FlagType {
-	start_index := len(remembered_items)
-	current_pos := here()
-	m := MinionPairArray{}
-	mtype := get_item()
-	var seeking string
-	for {
-		// ',' before the closing bracket is allowed
-		if mtype == F_Token_MapEnd {
+		t = ib.get_token()
+		if t == Token_End {
 			break
 		}
-		// expect key
-		if mtype == T_String {
-			key := remembered_items[len(remembered_items)-1].Data.(MinionString)
-			if _, ok := m.Find(key); ok {
-				panic(fmt.Sprintf(
-					"Map key not unique: %s (at position %s)",
-					key,
-					pos(current_pos)))
-			}
-			current_pos = here()
-			mtype = get_item()
-			// expect ':'
-			if mtype != F_Token_Colon {
-				panic(fmt.Sprintf(
-					"Expecting ':' in Map item at position %s",
-					pos(current_pos)))
-			}
-			current_pos = here()
-			mtype = get_item()
-			// expect value
-			seeking = "Reading map, expecting a value at position %s"
-			if real_minion_value(mtype) {
-				current_pos = here()
-				mtype = get_item()
-				if mtype == F_Token_MapEnd {
-					break
-				} else if mtype == F_Token_Comma {
-					current_pos = here()
-					mtype = get_item()
-					continue
-				}
-				panic(fmt.Sprintf(
-					"Reading map, expecting ',' or '}' at position %s",
-					pos(current_pos)))
-			} else if mtype == F_Macro {
-				seeking = "Expecting map value, undefined macro name at position %s"
-			}
-		} else {
-			seeking = "Reading map, expecting a key at position %s"
-		}
-		panic(fmt.Sprintf(seeking, pos(current_pos)))
+		ib.error(fmt.Sprintf(
+			"Expecting end of data, unexpected item: %s\n ... current position %s",
+			ib.token_text(t), pos(ib.here())))
 	}
-	new_PairArray(start_index)
-	return T_PairArray
+	return m
 }
 
-// Build a new PairArray item from items on the stack, the starting index
-// being passed as argument.
-// Place the result on the remember stack.
-func new_PairArray(start_index int) {
-	l := len(remembered_items) - start_index
-	if (l & 1) != 0 {
-		// Each entry is a pair, i.e. it consists of two items.
-		panic("[BUG] In new_PairArray: odd number of items on stack")
-	}
-	l /= 2
-	m := make(MinionPairArray, 0, l)
-	i := start_index
-	for range l {
-		m = append(m, MinionPair{
-			remembered_items[i].Data.(MinionString),
-			remembered_items[i+1]})
-		i += 2
-	}
-	remembered_items = remembered_items[:start_index+1]
-	remembered_items[start_index] = MinionValue{T_PairArray, F_NoFlags, m}
-}
-
+// *******************************
 // *** dump functions (serializing)
 
-func dump_string(source string) {
-	dump_buffer = append(dump_buffer, '"')
+type dumpBuffer struct {
+	indent int // = 2;
+	depth  int
+	buffer []byte
+}
+
+// Return a new dumper function with its own buffer
+func Dumper() func(MValue, int) string {
+	var dbuf = dumpBuffer{indent: 2}
+	return func(m MValue, pretty int) string {
+		return dbuf.dump(m, pretty)
+	}
+}
+
+func (db *dumpBuffer) dump_string(source string) {
+	db.buffer = append(db.buffer, '"')
 	var ch byte
 	for _, ch = range []byte(source) {
 		if ch >= 32 {
 			if ch == 127 {
-				dump_buffer = append(dump_buffer, '\\', 'u', '0', '0', '7', 'F')
+				db.buffer = append(db.buffer, '\\', 'u', '0', '0', '7', 'F')
 				continue
 			}
-			dump_buffer = append(dump_buffer, ch)
+			db.buffer = append(db.buffer, ch)
 			continue
 		}
 		switch ch {
 		case '"':
-			dump_buffer = append(dump_buffer, '\\', '"')
+			db.buffer = append(db.buffer, '\\', '"')
 			//break
 		case '\n':
-			dump_buffer = append(dump_buffer, '\\', 'n')
+			db.buffer = append(db.buffer, '\\', 'n')
 			//break
 		case '\t':
-			dump_buffer = append(dump_buffer, '\\', 't')
+			db.buffer = append(db.buffer, '\\', 't')
 			//break
 		case '\b':
-			dump_buffer = append(dump_buffer, '\\', 'b')
+			db.buffer = append(db.buffer, '\\', 'b')
 			//break
 		case '\f':
-			dump_buffer = append(dump_buffer, '\\', 'f')
+			db.buffer = append(db.buffer, '\\', 'f')
 			//break
 		case '\r':
-			dump_buffer = append(dump_buffer, '\\', 'r')
+			db.buffer = append(db.buffer, '\\', 'r')
 			//break
 		case '\\':
-			dump_buffer = append(dump_buffer, '\\', '\\')
+			db.buffer = append(db.buffer, '\\', '\\')
 			//break
 		default:
-			dump_buffer = append(dump_buffer, '\\', 'u', '0', '0')
+			db.buffer = append(db.buffer, '\\', 'u', '0', '0')
 			if ch >= 16 {
-				dump_buffer = append(dump_buffer, '1')
+				db.buffer = append(db.buffer, '1')
 				ch -= 16
 			} else {
-				dump_buffer = append(dump_buffer, '0')
+				db.buffer = append(db.buffer, '0')
 			}
 			if ch >= 10 {
-				dump_buffer = append(dump_buffer, 'A'+ch-10)
+				db.buffer = append(db.buffer, 'A'+ch-10)
 			} else {
-				dump_buffer = append(dump_buffer, '0'+ch)
+				db.buffer = append(db.buffer, '0'+ch)
 			}
 		}
 	}
-	dump_buffer = append(dump_buffer, '"')
+	db.buffer = append(db.buffer, '"')
 }
 
-func dump_pad(n int) {
-	if n >= 0 {
-		dump_buffer = append(dump_buffer, '\n')
-		n *= indentation
+func (db *dumpBuffer) dump_pad() {
+	if db.depth >= 0 {
+		db.buffer = append(db.buffer, '\n')
+		n := db.depth * db.indent
 		for n > 0 {
-			dump_buffer = append(dump_buffer, ' ')
+			db.buffer = append(db.buffer, ' ')
 			n--
 		}
 	}
 }
 
-func dump_list(source MinionValue, indent int) bool {
-	dump_buffer = append(dump_buffer, '[')
-	a := source.Data.(MinionArray)
-	if len(a) != 0 {
-		var new_depth int = -1
-		if indent >= 0 {
-			new_depth = indent + 1
+func (db *dumpBuffer) dump_list(source MList) {
+	db.buffer = append(db.buffer, '[')
+	if source.Size() != 0 {
+		var d = db.depth
+		if d >= 0 {
+			db.depth++
 		}
-		for _, m := range a {
-			dump_pad(new_depth)
-			if !dump_value(m, new_depth) {
-				return false
-			}
-			dump_buffer = append(dump_buffer, ',')
+		for _, m := range source {
+			db.dump_pad()
+			db.dump_value(m)
+			db.buffer = append(db.buffer, ',')
 		}
-		dump_buffer = dump_buffer[:len(dump_buffer)-1] // remove last ','
-		dump_pad(indent)
+		db.depth = d
+		db.buffer = db.buffer[:len(db.buffer)-1] // remove last ','
+		db.dump_pad()
 	}
-	dump_buffer = append(dump_buffer, ']')
-	return true
+	db.buffer = append(db.buffer, ']')
 }
 
-func dump_map(source MinionValue, indent int) bool {
-	dump_buffer = append(dump_buffer, '{')
-	a := source.Data.(MinionPairArray)
-	if len(a) != 0 {
-		var new_depth int = -1
-		if indent >= 0 {
-			new_depth = indent + 1
+func (db *dumpBuffer) dump_map(source MMap) {
+	db.buffer = append(db.buffer, '{')
+	if source.Size() != 0 {
+		var d = db.depth
+		if d >= 0 {
+			db.depth++
 		}
-		for _, m := range a {
-			dump_pad(new_depth)
-			dump_string(string(m.Key))
-			dump_buffer = append(dump_buffer, ':')
-			if indent >= 0 {
-				dump_buffer = append(dump_buffer, ' ')
+		for _, m := range source {
+			db.dump_pad()
+			db.dump_string(m.Key)
+			db.buffer = append(db.buffer, ':')
+			if d >= 0 {
+				db.buffer = append(db.buffer, ' ')
 			}
-			if !dump_value(m.Value, new_depth) {
-				return false
-			}
-			dump_buffer = append(dump_buffer, ',')
+			db.dump_value(m.Value)
+			db.buffer = append(db.buffer, ',')
 		}
-		dump_buffer = dump_buffer[:len(dump_buffer)-1] // remove last ','
-		dump_pad(indent)
+		db.depth = d
+		db.buffer = db.buffer[:len(db.buffer)-1] // remove last ','
+		db.dump_pad()
 	}
-	dump_buffer = append(dump_buffer, '}')
-	return true
+	db.buffer = append(db.buffer, '}')
 }
 
-func dump_value(source MinionValue, indent int) bool {
-	var ok bool = true
-	switch source.Type {
-	case T_String:
+func (db *dumpBuffer) dump_value(source MValue) {
+	switch source := source.(type) {
+	case MString:
 		// Strings don't receive any extra formatting
-		s := source.Data.(MinionString)
-		dump_string(string(s))
+		db.dump_string(string(source))
 		//break
-	case T_Array:
-		ok = dump_list(source, indent)
+	case MList:
+		db.dump_list(source)
 		//break
-	case T_PairArray:
-		ok = dump_map(source, indent)
+	case MMap:
+		db.dump_map(source)
 		//break
 	default:
-		ok = false
+		panic(fmt.Sprintf("[BUG] MINION dump: bad MValue type: %#v", source))
 	}
-	return ok
 }
 
-func MinionDump(source MinionValue, indent int) (string, bool) {
-	dump_buffer = dump_buffer[:0] // reset dump_buffer
-	if dump_value(source, indent) {
-		return string(dump_buffer), true
+func (db *dumpBuffer) dump(source MValue, pretty int) string {
+	db.depth = -1
+	if pretty >= 0 {
+		db.depth = 0
+		if pretty != 0 {
+			db.indent = pretty
+		}
 	}
-	return "", false
+	db.buffer = db.buffer[:0] // reset db.buffer
+	db.dump_value(source)
+	return string(db.buffer)
 }

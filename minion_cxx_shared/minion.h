@@ -75,6 +75,10 @@ public:
         MMap& m)
         : _MV{std::make_shared<MMap>(m)}
     {}
+    // Using initializer_lists for list
+    MValue(std::initializer_list<MValue> items);
+    // A version for a map seems unlikely because of ambiguity (would
+    // an element be a map pair or a two-element list?).
 
     int type() { return this->index(); }
     bool is_null() { return this->index() == 0; }

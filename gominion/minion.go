@@ -1,4 +1,4 @@
-package minion
+package gominion
 
 import (
 	"fmt"
@@ -14,25 +14,25 @@ const (
 )
 
 const (
-	Token_End = iota
-	Token_StartList
-	Token_EndList
-	Token_StartMap
-	Token_EndMap
-	Token_Comma
-	Token_Colon
-	Token_Macro
-	Token_String
+	token_End = iota
+	token_StartList
+	token_EndList
+	token_StartMap
+	token_EndMap
+	token_Comma
+	token_Colon
+	token_Macro
+	token_String
 )
 
 var token_text_map = map[int]string{
-	Token_End:       "end of data",
-	Token_StartList: "'['",
-	Token_EndList:   "']'",
-	Token_StartMap:  "'{'",
-	Token_EndMap:    "'}'",
-	Token_Comma:     "','",
-	Token_Colon:     "':'",
+	token_End:       "end of data",
+	token_StartList: "'['",
+	token_EndList:   "']'",
+	token_StartMap:  "'{'",
+	token_EndMap:    "'}'",
+	token_Comma:     "','",
+	token_Colon:     "':'",
 }
 
 type MValue interface {
@@ -42,6 +42,12 @@ type MValue interface {
 type MString string
 
 func (m MString) Size() int {
+	return len(m)
+}
+
+type MError string
+
+func (m MError) Size() int {
 	return len(m)
 }
 
@@ -146,9 +152,7 @@ type position struct {
 	char int
 }
 
-//type MinionMacros map[string]MValue
-
-type InputBuffer struct {
+type input_buffer struct {
 	macro_map MMap
 
 	// for character-by-character reading
@@ -162,14 +166,14 @@ type InputBuffer struct {
 	ch_buffer []byte //= make([]byte, 0, 100)
 }
 
-func (ib *InputBuffer) token_text(token int) string {
-	if token == Token_String || token == Token_Macro {
+func (ib *input_buffer) token_text(token int) string {
+	if token == token_String || token == token_Macro {
 		return "\"" + string(ib.ch_buffer) + "\""
 	}
 	return token_text_map[token]
 }
 
-func (ib *InputBuffer) get_macro(name string) MValue {
+func (ib *input_buffer) get_macro(name string) MValue {
 	m := ib.macro_map.Get(name)
 	if m == nil {
 		ib.error(fmt.Sprintf(
@@ -185,35 +189,35 @@ func (ib *InputBuffer) get_macro(name string) MValue {
  * in `ch_buffer`.
  * If the input is invalid, the function "panics", passing a message.
  */
-func (ib *InputBuffer) get_token() int {
+func (ib *input_buffer) get_token() int {
 	var ch byte
 	for {
 		ch = ib.read_ch(false)
 		switch ch {
 		// Act according to the next input character.
 		case 0: // end of input, no next item
-			return Token_End
+			return token_End
 		case ' ':
 		case '\n': // continue seeking start of item
 			continue
 		case ':':
-			return Token_Colon
+			return token_Colon
 		case ',':
-			return Token_Comma
+			return token_Comma
 		case '[':
-			return Token_StartList
+			return token_StartList
 		case ']':
-			return Token_EndList
+			return token_EndList
 		case '{':
-			return Token_StartMap
+			return token_StartMap
 		case '}':
-			return Token_EndMap
+			return token_EndMap
 		case '"':
 			ib.get_string()
-			return Token_String
+			return token_String
 		case '&': // start of macro name
 			ib.get_bare_string(ch)
-			return Token_Macro
+			return token_Macro
 		case '#': // start comment
 			ch = ib.read_ch(false)
 			if ch == '[' {
@@ -248,12 +252,12 @@ func (ib *InputBuffer) get_token() int {
 			continue // continue seeking item
 		default:
 			ib.get_bare_string(ch)
-			return Token_String
+			return token_String
 		}
 	}
 }
 
-func (ib *InputBuffer) read_ch(instring bool) byte {
+func (ib *input_buffer) read_ch(instring bool) byte {
 	if ib.ch_index >= len(ib.ch_input) {
 		return 0
 	}
@@ -283,7 +287,7 @@ func (ib *InputBuffer) read_ch(instring bool) byte {
 	return 0 // unreachable
 }
 
-func (ib *InputBuffer) unread_ch() {
+func (ib *input_buffer) unread_ch() {
 	if ib.ch_index == 0 {
 		panic("[BUG] unread_ch reached start of data")
 	}
@@ -291,7 +295,7 @@ func (ib *InputBuffer) unread_ch() {
 	//NOTE: '\n' is never unread!
 }
 
-func (ib *InputBuffer) here() position {
+func (ib *input_buffer) here() position {
 	return position{ib.line_index + 1, ib.ch_index - ib.ch_linestart}
 }
 
@@ -309,7 +313,7 @@ func pos(p position) string {
  *
  * The result is available in `ch_buffer`.
  */
-func (ib *InputBuffer) get_string() {
+func (ib *input_buffer) get_string() {
 	ib.ch_buffer = ib.ch_buffer[:0]
 	start_pos := ib.here()
 	var ch byte
@@ -384,7 +388,7 @@ func (ib *InputBuffer) get_string() {
 
 // This version reads a non-delimited string.
 // The result is available in `ch_buffer`.
-func (ib *InputBuffer) get_bare_string(ch byte) {
+func (ib *input_buffer) get_bare_string(ch byte) {
 	ib.ch_buffer = ib.ch_buffer[:0]
 	for {
 		ib.ch_buffer = append(ib.ch_buffer, ch)
@@ -404,7 +408,7 @@ func (ib *InputBuffer) get_bare_string(ch byte) {
 	}
 }
 
-func (ib *InputBuffer) last_n_chars(n int) string {
+func (ib *input_buffer) last_n_chars(n int) string {
 	ch_start := 0
 	recent := ib.ch_index
 	if recent > n {
@@ -421,28 +425,28 @@ func (ib *InputBuffer) last_n_chars(n int) string {
 	return ib.ch_input[ch_start:ib.ch_index]
 }
 
-func (ib *InputBuffer) error(msg string) {
+func (ib *input_buffer) error(msg string) {
 	// Add most recently read characters
 	panic(msg + "\n ... " + ib.last_n_chars(80))
 }
 
-func (ib *InputBuffer) get_list() MValue {
+func (ib *input_buffer) get_list() MValue {
 	var mlist MList
 	for {
 		t := ib.get_token()
 		switch t {
-		case Token_EndList:
+		case token_EndList:
 			return mlist
-		case Token_String:
+		case token_String:
 			mlist = append(mlist, MString(ib.ch_buffer))
 			//break
-		case Token_StartList:
+		case token_StartList:
 			mlist = append(mlist, ib.get_list())
 			//break
-		case Token_StartMap:
+		case token_StartMap:
 			mlist = append(mlist, ib.get_map())
 			//break
-		case Token_Macro:
+		case token_Macro:
 			mlist = append(mlist, ib.get_macro(string(ib.ch_buffer)))
 			//break
 		default:
@@ -451,10 +455,10 @@ func (ib *InputBuffer) get_list() MValue {
 				ib.token_text(t), pos(ib.here())))
 		}
 		t = ib.get_token()
-		if t == Token_Comma {
+		if t == token_Comma {
 			continue
 		}
-		if t == Token_EndList {
+		if t == token_EndList {
 			return mlist
 		}
 		ib.error(fmt.Sprintf(
@@ -463,13 +467,13 @@ func (ib *InputBuffer) get_list() MValue {
 	}
 }
 
-func (ib *InputBuffer) get_map() MValue {
+func (ib *input_buffer) get_map() MValue {
 	var mmap MMap
 	var key string
 	for {
 		t := ib.get_token()
-		if t != Token_String {
-			if t == Token_EndMap {
+		if t != token_String {
+			if t == token_EndMap {
 				return mmap
 			}
 			ib.error(fmt.Sprintf(
@@ -478,23 +482,23 @@ func (ib *InputBuffer) get_map() MValue {
 		}
 		key = string(ib.ch_buffer)
 		t = ib.get_token()
-		if t != Token_Colon {
+		if t != token_Colon {
 			ib.error(fmt.Sprintf(
 				"Unexpected item whilst seeking map element colon: %s\n ... current position %s",
 				ib.token_text(t), pos(ib.here())))
 		}
 		t = ib.get_token()
 		switch t {
-		case Token_String:
+		case token_String:
 			mmap = append(mmap, MPair{key, MString(ib.ch_buffer)})
 			//break
-		case Token_StartList:
+		case token_StartList:
 			mmap = append(mmap, MPair{key, ib.get_list()})
 			//break
-		case Token_StartMap:
+		case token_StartMap:
 			mmap = append(mmap, MPair{key, ib.get_map()})
 			//break
-		case Token_Macro:
+		case token_Macro:
 			mmap = append(mmap, MPair{key, ib.get_macro(string(ib.ch_buffer))})
 			//break
 		default:
@@ -503,10 +507,10 @@ func (ib *InputBuffer) get_map() MValue {
 				ib.token_text(t), pos(ib.here())))
 		}
 		t = ib.get_token()
-		if t == Token_Comma {
+		if t == token_Comma {
 			continue
 		}
-		if t == Token_EndMap {
+		if t == token_EndMap {
 			return mmap
 		}
 		ib.error(fmt.Sprintf(
@@ -516,7 +520,7 @@ func (ib *InputBuffer) get_map() MValue {
 }
 
 // Convert a unicode code point (as hex string) to a UTF-8 string
-func (ib *InputBuffer) add_unicode_to_ch_buffer(l int) {
+func (ib *input_buffer) add_unicode_to_ch_buffer(l int) {
 	buf := make([]byte, l)
 	for i := range l {
 		buf[i] = ib.read_ch(true)
@@ -536,23 +540,24 @@ func (ib *InputBuffer) add_unicode_to_ch_buffer(l int) {
 		pos(ib.here())))
 }
 
-func (ib *InputBuffer) Read(input_string string) (val MValue, error_message string) {
+func ReadMinion(input_string string) (val MValue) {
 	// Prepare input buffer
-	ib.ch_input = input_string
-	ib.ch_index = 0
-	ib.line_index = 0
-	ib.ch_linestart = 0
-
+	ib := input_buffer{
+		ch_input:     input_string,
+		ch_index:     0,
+		line_index:   0,
+		ch_linestart: 0,
+	}
 	// Clear macros, just to be sure ...
-	clear(ib.macro_map)
+	//clear(ib.macro_map)
 
 	// Catch errors (panic calls)
 	defer func() {
-		clear(ib.macro_map)
+		//clear(ib.macro_map)
 		if r := recover(); r != nil {
 			e, ok := r.(string)
 			if ok {
-				error_message = e
+				val = MError(e)
 			} else {
 				panic(r)
 			}
@@ -560,44 +565,44 @@ func (ib *InputBuffer) Read(input_string string) (val MValue, error_message stri
 	}()
 
 	val = ib.read_val()
-	return val, error_message
+	return val
 }
 
-func (ib *InputBuffer) read_val() MValue {
+func (ib *input_buffer) read_val() MValue {
 	var m MValue
 	var key string
 	for {
 		t := ib.get_token()
 		switch t {
-		case Token_String:
+		case token_String:
 			m = MString(ib.ch_buffer)
 			//break
-		case Token_StartList:
+		case token_StartList:
 			m = ib.get_list()
 			//break
-		case Token_StartMap:
+		case token_StartMap:
 			m = ib.get_map()
 			//break
-		case Token_Macro:
+		case token_Macro:
 			key = string(ib.ch_buffer)
 			t = ib.get_token()
-			if t != Token_Colon {
+			if t != token_Colon {
 				ib.error(fmt.Sprintf(
 					"Unexpected item whilst seeking macro definition colon: %s\n ... current position %s",
 					ib.token_text(t), pos(ib.here())))
 			}
 			t = ib.get_token()
 			switch t {
-			case Token_String:
+			case token_String:
 				ib.macro_map = append(ib.macro_map, MPair{key, MString(ib.ch_buffer)})
 				//break
-			case Token_StartList:
+			case token_StartList:
 				ib.macro_map = append(ib.macro_map, MPair{key, ib.get_list()})
 				//break
-			case Token_StartMap:
+			case token_StartMap:
 				ib.macro_map = append(ib.macro_map, MPair{key, ib.get_map()})
 				//break
-			case Token_Macro:
+			case token_Macro:
 				ib.macro_map = append(ib.macro_map, MPair{key, ib.get_macro(string(ib.ch_buffer))})
 				//break
 			default:
@@ -606,7 +611,7 @@ func (ib *InputBuffer) read_val() MValue {
 					ib.token_text(t), pos(ib.here())))
 			}
 			t = ib.get_token()
-			if t == Token_Comma {
+			if t == token_Comma {
 				continue
 			}
 			ib.error(fmt.Sprintf(
@@ -619,7 +624,7 @@ func (ib *InputBuffer) read_val() MValue {
 				ib.token_text(t), pos(ib.here())))
 		}
 		t = ib.get_token()
-		if t == Token_End {
+		if t == token_End {
 			break
 		}
 		ib.error(fmt.Sprintf(
@@ -632,21 +637,13 @@ func (ib *InputBuffer) read_val() MValue {
 // *******************************
 // *** dump functions (serializing)
 
-type dumpBuffer struct {
+type dump_buffer struct {
 	indent int // = 2;
 	depth  int
 	buffer []byte
 }
 
-// Return a new dumper function with its own buffer
-func Dumper() func(MValue, int) string {
-	var dbuf = dumpBuffer{indent: 2}
-	return func(m MValue, pretty int) string {
-		return dbuf.dump(m, pretty)
-	}
-}
-
-func (db *dumpBuffer) dump_string(source string) {
+func (db *dump_buffer) dump_string(source string) {
 	db.buffer = append(db.buffer, '"')
 	var ch byte
 	for _, ch = range []byte(source) {
@@ -698,7 +695,7 @@ func (db *dumpBuffer) dump_string(source string) {
 	db.buffer = append(db.buffer, '"')
 }
 
-func (db *dumpBuffer) dump_pad() {
+func (db *dump_buffer) dump_pad() {
 	if db.depth >= 0 {
 		db.buffer = append(db.buffer, '\n')
 		n := db.depth * db.indent
@@ -709,7 +706,7 @@ func (db *dumpBuffer) dump_pad() {
 	}
 }
 
-func (db *dumpBuffer) dump_list(source MList) {
+func (db *dump_buffer) dump_list(source MList) {
 	db.buffer = append(db.buffer, '[')
 	if source.Size() != 0 {
 		var d = db.depth
@@ -728,7 +725,7 @@ func (db *dumpBuffer) dump_list(source MList) {
 	db.buffer = append(db.buffer, ']')
 }
 
-func (db *dumpBuffer) dump_map(source MMap) {
+func (db *dump_buffer) dump_map(source MMap) {
 	db.buffer = append(db.buffer, '{')
 	if source.Size() != 0 {
 		var d = db.depth
@@ -752,7 +749,7 @@ func (db *dumpBuffer) dump_map(source MMap) {
 	db.buffer = append(db.buffer, '}')
 }
 
-func (db *dumpBuffer) dump_value(source MValue) {
+func (db *dump_buffer) dump_value(source MValue) {
 	switch source := source.(type) {
 	case MString:
 		// Strings don't receive any extra formatting
@@ -769,15 +766,15 @@ func (db *dumpBuffer) dump_value(source MValue) {
 	}
 }
 
-func (db *dumpBuffer) dump(source MValue, pretty int) string {
-	db.depth = -1
+func DumpMinion(source MValue, pretty int) string {
+	// Get a new dump buffer
+	var dbuf = dump_buffer{indent: 2, depth: -1}
 	if pretty >= 0 {
-		db.depth = 0
+		dbuf.depth = 0
 		if pretty != 0 {
-			db.indent = pretty
+			dbuf.indent = pretty
 		}
 	}
-	db.buffer = db.buffer[:0] // reset db.buffer
-	db.dump_value(source)
-	return string(db.buffer)
+	dbuf.dump_value(source)
+	return string(dbuf.buffer)
 }

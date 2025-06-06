@@ -24,8 +24,6 @@ int main()
 
     struct timespec start, end, xtra;
 
-    InputBuffer miniondata;
-
     MValue m;
 
     for (int count = 0; count < 10; ++count) {
@@ -39,11 +37,12 @@ int main()
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start); // Initial timestamp
 
-            m = miniondata.read(indata);
+            m = Reader::read(indata);
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end); // Get current time
 
-            m = {};
+            Writer w(m, -1);
+            m = {}; // free memory
 
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &xtra); // Get current time
 
@@ -53,17 +52,17 @@ int main()
 
             elapsed = xtra.tv_sec - end.tv_sec;
             elapsed += (xtra.tv_nsec - end.tv_nsec) / 1000.0;
-            printf("%0.2f microseconds freeing\n", elapsed);
+            printf("%0.2f microseconds dumping\n", elapsed);
         }
         printf("  - - - - -\n");
     }
 
-    m = miniondata.read(indata);
+    m = Reader::read(indata);
     if (m.type() == T_Error) {
         printf("PARSE ERROR: %s\n", m.error_message());
     } else if (!m.is_null()) {
-        DumpBuffer dump_buffer;
-        const char* result = dump_buffer.dump(m, 0);
+        Writer writer(m, 0);
+        const char* result = writer.dump_c();
         if (result)
             printf("\n -->\n%s\n", result);
         else

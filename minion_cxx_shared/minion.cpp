@@ -23,7 +23,7 @@ inline const std::map<int, std::string> token_text_map{{Token_End, "end of data"
                                                        {Token_Comma, "','"},
                                                        {Token_Colon, "':'"}};
 
-std::string InputBuffer::token_text(
+std::string Reader::token_text(
     int token)
 {
     if (token == Token_String || token == Token_Macro)
@@ -31,23 +31,7 @@ std::string InputBuffer::token_text(
     return token_text_map.at(token);
 }
 
-/* *** Memory management ***
- *
- * The `InputBuffer` class manages the structures used during parsing.
- * It allows some of these to be reused when multiple source strings are
- * parsed, to minimize memory allocation and deallocation.
- * 
- * The basic structure used to represent a MINION item is the `MValue`,
- * which is basically a variant containing a shared pointer (primarily
- * string, list or map).
- *
- * To avoid memory leaks, especially in the case of parsing errors, all
- * newly allocated items are immediately added "in-place" to the structure
- * belonging to the root `MValue`. Thus there should never be any
- * "floating", unowned data.
- */
-
-// Read a string as in `int` value, taking an optional context string
+// Read a string as an `int` value, taking an optional context string
 // for error reports.
 int string2int(
     std::string& s, std::string_view context = "")
@@ -88,7 +72,7 @@ std::string to_hex(
     return s;
 }
 
-char InputBuffer::read_ch(
+char Reader::read_ch(
     bool instring)
 {
     if (ch_index >= input.size())
@@ -121,7 +105,7 @@ char InputBuffer::read_ch(
     return 0; // unreachable
 }
 
-void InputBuffer::unread_ch()
+void Reader::unread_ch()
 {
     if (ch_index == 0) {
         error("[BUG] unread_ch reached start of data");
@@ -130,7 +114,7 @@ void InputBuffer::unread_ch()
     //NOTE: '\n' is never unread!
 }
 
-void InputBuffer::error(
+void Reader::error(
     std::string_view msg)
 {
     // Add most recently read characters
@@ -152,7 +136,7 @@ void InputBuffer::error(
 }
 
 // The result is available in `ch_buffer`.
-void InputBuffer::get_bare_string(
+void Reader::get_bare_string(
     char ch)
 {
     ch_buffer.clear();
@@ -181,7 +165,7 @@ void InputBuffer::get_bare_string(
 }
 
 // The result is available in `ch_buffer`.
-void InputBuffer::get_string()
+void Reader::get_string()
 {
     // +++ a delimited string (terminated by '"')
     // Escapes, introduced by '\', are possible. These are an extension
@@ -262,7 +246,7 @@ void InputBuffer::get_string()
     }
 }
 
-MValue InputBuffer::get_macro(
+MValue Reader::get_macro(
     std::string_view s)
 {
     auto m = macro_map.get(s);
@@ -280,7 +264,7 @@ MValue InputBuffer::get_macro(
  * If the input is invalid, a MinionError exception will be thrown,
  * containing a message.
  */
-int InputBuffer::get_token()
+int Reader::get_token()
 {
     char ch;
     while (true) {
@@ -348,7 +332,7 @@ int InputBuffer::get_token()
     }
 }
 
-MValue InputBuffer::get_list()
+MValue Reader::get_list()
 {
     MList mlist;
     while (true) {
@@ -386,7 +370,7 @@ MValue InputBuffer::get_list()
     }
 }
 
-MValue InputBuffer::get_map()
+MValue Reader::get_map()
 {
     MMap mmap;
     std::string key;
@@ -440,7 +424,7 @@ MValue InputBuffer::get_map()
 }
 
 // Convert a unicode code point (as hex string) to a UTF-8 string
-bool InputBuffer::add_unicode_to_ch_buffer(
+bool Reader::add_unicode_to_ch_buffer(
     int len)
 {
     // Convert the unicode to an integer
@@ -482,32 +466,33 @@ bool InputBuffer::add_unicode_to_ch_buffer(
     return true;
 }
 
-MValue InputBuffer::read(
-    std::string_view input_string)
+//static
+MValue Reader::read(
+    std::string_view s)
 {
-    // Prepare input buffer
-    input = input_string;
-    ch_index = 0;
-    line_index = 0;
-    ch_linestart = 0;
+    return Reader(s).result;
+}
 
-    // Clear macros, just to be sure ...
-    macro_map.clear();
-
-    MValue m;
+Reader::Reader(
+    std::string_view input_string)
+    : input{input_string}
+    , ch_index{0}
+    , line_index{0}
+    , ch_linestart{0}
+{
     std::string key;
     try {
         while (true) {
             auto t = get_token();
             switch (t) {
             case Token_String:
-                m = ch_buffer;
+                result = ch_buffer;
                 break;
             case Token_StartList:
-                m = get_list();
+                result = get_list();
                 break;
             case Token_StartMap:
-                m = get_map();
+                result = get_map();
                 break;
             case Token_Macro:
                 key = ch_buffer;
@@ -561,17 +546,11 @@ MValue InputBuffer::read(
         }
 
     } catch (MinionError& e) {
-        macro_map.clear();
-        return e;
-    } catch (...) {
-        macro_map.clear();
-        throw;
+        result = e;
     }
-    macro_map.clear();
-    return m;
 }
 
-void DumpBuffer::dump_string(
+void Writer::dump_string(
     std::string_view source)
 {
     add('"');
@@ -636,7 +615,7 @@ void DumpBuffer::dump_string(
     add('"');
 }
 
-void DumpBuffer::dump_pad()
+void Writer::dump_pad()
 {
     if (depth >= 0) {
         add('\n');
@@ -645,7 +624,7 @@ void DumpBuffer::dump_pad()
     }
 }
 
-void DumpBuffer::dump_list(
+void Writer::dump_list(
     MList& source)
 {
     add('[');
@@ -666,7 +645,7 @@ void DumpBuffer::dump_list(
     add(']');
 }
 
-void DumpBuffer::dump_map(
+void Writer::dump_map(
     MMap& source)
 {
     add('{');
@@ -692,7 +671,7 @@ void DumpBuffer::dump_map(
     add('}');
 }
 
-void DumpBuffer::dump_value(
+void Writer::dump_value(
     MValue& source)
 {
     switch (source.type()) {
@@ -710,7 +689,17 @@ void DumpBuffer::dump_value(
     }
 }
 
-const char* DumpBuffer::dump(
+std::string_view Writer::dump()
+{
+    return buffer;
+}
+
+const char* Writer::dump_c()
+{
+    return buffer.c_str();
+}
+
+Writer::Writer(
     MValue& data, int pretty)
 {
     depth = -1;
@@ -719,9 +708,7 @@ const char* DumpBuffer::dump(
         if (pretty != 0)
             indent = pretty;
     }
-    buffer.clear();
     dump_value(data);
-    return buffer.c_str();
 }
 
 bool MList::get_string(

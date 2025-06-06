@@ -6,12 +6,12 @@
 #include <variant>
 #include <vector>
 
-/* The parser, InputBuffer::read returns a single MValue. If there is an
+/* The parser, Reader::read returns a single MValue. If there is an
  * error, a MinionError exception will be thrown internally and caught in
- * InputBuffer::read, which then returns a special MValue with the error
+ * Reader::read, which then returns a special MValue with the error
  * message.
  */
- 
+
 namespace minion {
 
 enum minion_type { T_NoType = 0, T_String, T_List, T_Map, T_Error };
@@ -37,7 +37,7 @@ struct MError
     {}
 };
 
-class InputBuffer;
+class Reader;
 
 using _MV = std::variant<std::monostate,
                          std::shared_ptr<MString>,
@@ -114,7 +114,7 @@ using MPair = std::pair<std::string, MValue>;
 
 class MMap : public std::vector<MPair>
 {
-    friend InputBuffer;
+    friend Reader;
 
 public:
     MValue get(std::string_view key);
@@ -134,7 +134,7 @@ struct position
     size_t byte_ix;
 };
 
-class InputBuffer
+class Reader
 {
     MMap macro_map;
     MValue get_macro(std::string_view s);
@@ -156,7 +156,6 @@ class InputBuffer
         return std::to_string(p.line_n) + '.' + std::to_string(p.byte_ix);
     }
     void error(std::string_view msg);
-    //TODO-- MValue get_item(int expect = 0);
 
     MValue get_list();
     MValue get_map();
@@ -168,11 +167,14 @@ class InputBuffer
     int get_token();
     std::string token_text(int token);
 
+    Reader(std::string_view s);
+    MValue result;
+
 public:
-    MValue read(std::string_view s);
+    static MValue read(std::string_view s);
 };
 
-class DumpBuffer
+class Writer
 {
     int indent = 2;
     int depth;
@@ -186,238 +188,16 @@ class DumpBuffer
     void pop() { buffer.pop_back(); }
     void dump_value(MValue& source);
     void dump_string(std::string_view source);
-    //void dump_string(MString& source);
     void dump_list(MList& source);
     void dump_map(MMap& source);
     void dump_pad();
 
 public:
-    const char* dump(MValue& data, int pretty = -1);
+    Writer(MValue& data, int pretty = -1);
+    const char* dump_c();
+    std::string_view dump();
 };
 
 } // namespace minion
 
 #endif // MINION_H
-
-/*
-
-// forward declarations
-struct MValue;
-using MPair = std::pair<std::string, MValue>;
-struct MinionValue;
-class InputBuffer;
-class DumpBuffer;
-class MString;
-class MList;
-class MMap;
-
-struct MValue
-{
-    friend MinionValue;
-    friend MList;
-    friend MMap;
-    friend InputBuffer;
-    friend DumpBuffer;
-
-    MValue() = default;
-    MValue(MString* m);
-    MValue(MList* m);
-    MValue(MMap* m);
-
-    bool is_null() { return type == 0; }
-
-    MString* m_string();
-    MList* m_list();
-    MMap* m_map();
-
-    void copy(MinionValue& m); // deep copy function
-
-protected:
-    void free();
-
-    int type{0};
-    bool not_owner{false};
-    void* minion_item{nullptr};
-
-    MValue(
-        int t, void* p, bool o = false)
-        : type{t}
-        , not_owner{o}
-        , minion_item{p}
-    {}
-
-    void mcopy(MValue& m); // used by copy method
-};
-
-struct MinionValue : public MValue
-{
-    MinionValue() = default;
-    MinionValue(
-        MValue m)
-    {
-        type = m.type;
-        minion_item = m.minion_item;
-    }
-
-    ~MinionValue() { free(); }
-
-    MinionValue& operator=(
-        const MinionValue& source)
-    {
-        // self-assignment check
-        if (this != &source) {
-            this->free();
-            type = source.type;
-            minion_item = source.minion_item;
-            not_owner = false;
-        }
-        return *this;
-    }
-};
-
-class MString
-{
-    std::string data;
-
-public:
-    MString() = default;
-
-    MString(
-        std::string_view s)
-        : data{s}
-    {}
-
-    ~MString() = default;
-
-    std::string_view data_view() { return data; }
-};
-
-class MList
-{
-    std::vector<MValue> data;
-
-public:
-    MList() = default;
-
-    MList(
-        std::initializer_list<MValue> items)
-    {
-        for (const auto& item : items) {
-            add(item);
-        }
-    }
-
-    MList(
-        MList& source) // copy constructor
-    {
-        data.reserve(source.data.size());
-        for (auto& mv : source.data) {   // mv is reference to source element
-            data.emplace_back(MValue{}); // add null MValue
-            MValue& mref = data.back();  // get reference to added MValue
-            mv.mcopy(mref);
-        }
-    }
-
-    ~MList()
-    {
-        for (auto& m : data) {
-            m.free();
-        }
-    }
-
-    size_t size() { return data.size(); }
-
-    void add(
-        MValue m)
-    {
-        data.emplace_back(m);
-    }
-
-    MValue& get(
-        size_t index)
-    {
-        return data.at(index);
-    }
-
-    bool get_string(size_t index, std::string& s);
-    bool get_int(size_t index, int& i);
-};
-
-class MMap
-{
-    std::vector<MPair> data;
-
-public:
-    MMap() = default;
-
-    MMap(
-        std::initializer_list<MPair> items)
-    {
-        for (const auto& item : items) {
-            add(item);
-        }
-    }
-
-    MMap(
-        MMap& source) // copy constructor
-    {
-        data.reserve(source.data.size());
-        for (auto& mp : source.data) { // mv is reference to source element
-            // add pair with null MValue
-            data.emplace_back(MPair{mp.first, {}});
-            MValue& mref = data.back().second; // get reference to added MValue
-            mp.second.mcopy(mref);
-        }
-    }
-
-    ~MMap() { clear(); }
-
-    void clear()
-    {
-        for (auto& m : data) {
-            m.second.free();
-        }
-        data.clear();
-    }
-
-    size_t size() { return data.size(); }
-
-    void add(
-        MPair m)
-    {
-        data.emplace_back(m);
-    }
-
-    MPair& get_pair(
-        size_t index)
-    {
-        return data.at(index);
-    }
-
-    int search(
-        std::string_view key)
-    {
-        int i = 0;
-        for (auto& mp : data) {
-            if (mp.first == key)
-                return i;
-            ++i;
-        }
-        return -1;
-    }
-
-    MValue get(
-        std::string_view key)
-    {
-        for (auto& mp : data) {
-            if (mp.first == key)
-                return mp.second;
-        }
-        return {};
-    }
-
-    bool get_string(std::string_view key, std::string& s);
-    bool get_int(std::string_view key, int& i);
-};
-
-*/

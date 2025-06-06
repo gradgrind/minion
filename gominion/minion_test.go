@@ -1,4 +1,4 @@
-package minion
+package gominion
 
 import (
 	"fmt"
@@ -10,15 +10,14 @@ import (
 
 func TestM1(t *testing.T) {
 	fmt.Println("\n +++ TestM1:\n ==============")
-	ib := InputBuffer{}
-	doc, e := ib.Read("{A: 1 :}")
-	if len(e) == 0 {
-		fmt.Println("  -->")
-		dump := Dumper()
-		fmt.Println(dump(doc, -1))
-	} else {
+	doc := ReadMinion("{A: 1 :}")
+	if e, ok := doc.(MError); ok {
 		fmt.Println(" *** Error ***")
-		fmt.Println(e)
+		fmt.Printf("=== %s\n", e)
+	} else {
+		fmt.Println("  -->")
+		fmt.Printf("%#v\n", doc)
+		fmt.Println(DumpMinion(doc, -1))
 	}
 }
 
@@ -38,9 +37,9 @@ func TestM2(t *testing.T) {
 	fmt.Println("\n +++ TestM2:\n ==============")
 	var (
 		input   string
-		ib      InputBuffer
 		t0      time.Time
 		t1      time.Time
+		t2      time.Time
 		content []byte
 		err     error
 	)
@@ -53,23 +52,24 @@ func TestM2(t *testing.T) {
 			}
 			input = string(content)
 			t0 = time.Now()
-			ib = InputBuffer{}
-			ib.Read(input)
+			v := ReadMinion(input)
 			t1 = time.Now()
+			DumpMinion(v, -1)
+			t2 = time.Now()
 			fmt.Printf("== %s: %s\n", filepath.Base(fin), t1.Sub(t0))
+			fmt.Printf("  (Dump) %s\n", t2.Sub(t1))
 		}
 		fmt.Println("  ---")
 	}
 	fmt.Println("  ---------------------------------- ")
 
-	doc, e := ib.Read(input)
+	doc := ReadMinion(input)
 
-	if len(e) == 0 {
-		fmt.Println("  -->")
-		dump := Dumper()
-		fmt.Println(dump(doc, 0))
-	} else {
+	if e, ok := doc.(MError); ok {
 		fmt.Println(" *** Error ***")
 		fmt.Println(e)
+	} else {
+		fmt.Println("  -->")
+		fmt.Println(DumpMinion(doc, 0))
 	}
 }

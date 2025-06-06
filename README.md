@@ -17,6 +17,8 @@ The library itself comprises only minion.c(pp) and minion.h in the C(++) version
  - minion_cxx: The state information is held in class instances. This is a redesign using more C++ features. It shares data without using the standard C++ mechanism (shared_ptr). The memory is managed as a complete structure, rather than managing the MValue elements individually.
 
  - minion_cxx_shared: another rewrite, this time using shared_ptr.
+ 
+Along with the Go version, gominion, minion_cxx_shared has received the most attention. Algorithmically these two are very close to each other.
 
 I have tried to provide helpful error messages, but no i18n is supported at present.
 

@@ -6,14 +6,6 @@ import (
 )
 
 const (
-	T_NoType = iota
-	T_String
-	T_List
-	T_Map
-	T_Error
-)
-
-const (
 	token_End = iota
 	token_StartList
 	token_EndList
@@ -647,14 +639,6 @@ func (db *dump_buffer) dump_string(source string) {
 	db.buffer = append(db.buffer, '"')
 	var ch byte
 	for _, ch = range []byte(source) {
-		if ch >= 32 {
-			if ch == 127 {
-				db.buffer = append(db.buffer, '\\', 'u', '0', '0', '7', 'F')
-				continue
-			}
-			db.buffer = append(db.buffer, ch)
-			continue
-		}
 		switch ch {
 		case '"':
 			db.buffer = append(db.buffer, '\\', '"')
@@ -677,7 +661,14 @@ func (db *dump_buffer) dump_string(source string) {
 		case '\\':
 			db.buffer = append(db.buffer, '\\', '\\')
 			//break
+		case 127:
+			db.buffer = append(db.buffer, '\\', 'u', '0', '0', '7', 'F')
+			//break
 		default:
+			if ch >= 32 {
+				db.buffer = append(db.buffer, ch)
+				continue
+			}
 			db.buffer = append(db.buffer, '\\', 'u', '0', '0')
 			if ch >= 16 {
 				db.buffer = append(db.buffer, '1')

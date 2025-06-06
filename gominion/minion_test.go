@@ -19,6 +19,9 @@ func TestM1(t *testing.T) {
 		fmt.Printf("%#v\n", doc)
 		fmt.Println(DumpMinion(doc, -1))
 	}
+	doc0 := MString("{x: \"a\" and \"b\"}")
+	d := DumpMinion(doc0, -1)
+	fmt.Printf("§ %d %d %s\n", len(doc0), len(d), d)
 }
 
 var infiles = []string{

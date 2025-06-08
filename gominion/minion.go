@@ -3,6 +3,7 @@ package gominion
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -632,112 +633,123 @@ func (ib *input_buffer) read_val() MValue {
 type dump_buffer struct {
 	indent int // = 2;
 	depth  int
-	buffer []byte
+	buffer strings.Builder
 }
 
-func (db *dump_buffer) dump_string(source string) {
-	db.buffer = append(db.buffer, '"')
+func DumpString(source string) string {
+	buffer := strings.Builder{}
+	buffer.WriteByte('"')
 	var ch byte
 	for _, ch = range []byte(source) {
 		switch ch {
 		case '"':
-			db.buffer = append(db.buffer, '\\', '"')
+			buffer.WriteString("\\\"")
 			//break
 		case '\n':
-			db.buffer = append(db.buffer, '\\', 'n')
+			buffer.WriteString("\\n")
 			//break
 		case '\t':
-			db.buffer = append(db.buffer, '\\', 't')
+			buffer.WriteString("\\t")
 			//break
 		case '\b':
-			db.buffer = append(db.buffer, '\\', 'b')
+			buffer.WriteString("\\b")
 			//break
 		case '\f':
-			db.buffer = append(db.buffer, '\\', 'f')
+			buffer.WriteString("\\f")
 			//break
 		case '\r':
-			db.buffer = append(db.buffer, '\\', 'r')
+			buffer.WriteString("\\r")
 			//break
 		case '\\':
-			db.buffer = append(db.buffer, '\\', '\\')
+			buffer.WriteString("\\\\")
 			//break
 		case 127:
-			db.buffer = append(db.buffer, '\\', 'u', '0', '0', '7', 'F')
+			buffer.WriteString("\\u007F")
 			//break
 		default:
 			if ch >= 32 {
-				db.buffer = append(db.buffer, ch)
+				buffer.WriteByte(ch)
 				continue
 			}
-			db.buffer = append(db.buffer, '\\', 'u', '0', '0')
+			buffer.WriteString("\\u00")
 			if ch >= 16 {
-				db.buffer = append(db.buffer, '1')
+				buffer.WriteByte('1')
 				ch -= 16
 			} else {
-				db.buffer = append(db.buffer, '0')
+				buffer.WriteByte('0')
 			}
 			if ch >= 10 {
-				db.buffer = append(db.buffer, 'A'+ch-10)
+				buffer.WriteByte('A' + ch - 10)
 			} else {
-				db.buffer = append(db.buffer, '0'+ch)
+				buffer.WriteByte('0' + ch)
 			}
 		}
 	}
-	db.buffer = append(db.buffer, '"')
+	buffer.WriteByte('"')
+	return buffer.String()
+}
+
+func (db *dump_buffer) dump_string(source string) {
+	db.buffer.WriteString(DumpString(source))
 }
 
 func (db *dump_buffer) dump_pad() {
 	if db.depth >= 0 {
-		db.buffer = append(db.buffer, '\n')
-		n := db.depth * db.indent
-		for n > 0 {
-			db.buffer = append(db.buffer, ' ')
-			n--
+		db.buffer.WriteByte('\n')
+		if db.depth > 0 {
+			db.buffer.WriteString(
+				strings.Repeat(" ", db.depth*db.indent))
 		}
 	}
 }
 
 func (db *dump_buffer) dump_list(source MList) {
-	db.buffer = append(db.buffer, '[')
+	db.buffer.WriteByte('[')
 	if source.Size() != 0 {
 		var d = db.depth
 		if d >= 0 {
 			db.depth++
 		}
+		n := len(source)
 		for _, m := range source {
 			db.dump_pad()
 			db.dump_value(m)
-			db.buffer = append(db.buffer, ',')
+			n--
+			if n != 0 {
+				db.buffer.WriteByte(',')
+			}
 		}
 		db.depth = d
-		db.buffer = db.buffer[:len(db.buffer)-1] // remove last ','
 		db.dump_pad()
 	}
-	db.buffer = append(db.buffer, ']')
+	db.buffer.WriteByte(']')
 }
 
 func (db *dump_buffer) dump_map(source MMap) {
-	db.buffer = append(db.buffer, '{')
+	db.buffer.WriteByte('{')
 	if source.Size() != 0 {
 		var d = db.depth
 		if d >= 0 {
 			db.depth++
 		}
+		n := len(source)
 		for _, m := range source {
 			db.dump_pad()
 			db.dump_string(m.Key)
-			db.buffer = append(db.buffer, ':')
+			db.buffer.WriteByte(':')
 			if d >= 0 {
-				db.buffer = append(db.buffer, ' ')
+				db.buffer.WriteByte(' ')
 			}
 			db.dump_value(m.Value)
-			db.buffer = append(db.buffer, ',')
+			n--
+			if n != 0 {
+				db.buffer.WriteByte(',')
+			}
 		}
 		db.depth = d
-		db.buffer = db.buffer[:len(db.buffer)-1] // remove last ','
 		db.dump_pad()
 	}
-	db.buffer = append(db.buffer, '}')
+	db.buffer.WriteByte('}')
 }
 
 func (db *dump_buffer) dump_value(source MValue) {
@@ -767,5 +779,5 @@ func DumpMinion(source MValue, pretty int) string {
 		}
 	}
 	dbuf.dump_value(source)
-	return string(dbuf.buffer)
+	return string(dbuf.buffer.String())
 }

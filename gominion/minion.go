@@ -541,8 +541,6 @@ func ReadMinion(input_string string) (val MValue) {
 		line_index:   0,
 		ch_linestart: 0,
 	}
-	// Clear macros, just to be sure ...
-	//clear(ib.macro_map)
 
 	// Catch errors (panic calls)
 	defer func() {

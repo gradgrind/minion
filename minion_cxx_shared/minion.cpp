@@ -550,6 +550,15 @@ Reader::Reader(
     }
 }
 
+//static method
+std::string Writer::dumpString(
+    std::string_view source)
+{
+    auto w = Writer();
+    w.dump_string(source);
+    return w.buffer;
+}
+
 void Writer::dump_string(
     std::string_view source)
 {

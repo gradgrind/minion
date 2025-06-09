@@ -66,8 +66,13 @@ int main()
         if (result)
             printf("\n -->\n%s\n", result);
         else
-            printf("*** Dump failed\n");
+            printf("*** Dump failed\n");        
     }
+
+    printf("\n ++++++++++++++++++\n");
+    std::string s{"{\"A\": \"a\",\n\"B\": \"b\"}"};
+    printf("IN: %s\n", s.c_str());
+    printf("OUT: %s\n", Writer::dumpString(s).c_str());
 
     return 0;
 }

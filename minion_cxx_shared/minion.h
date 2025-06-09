@@ -192,10 +192,16 @@ class Writer
     void dump_map(MMap& source);
     void dump_pad();
 
+    Writer()
+        : depth{0}
+    {}
+
 public:
     Writer(MValue& data, int pretty = -1);
     const char* dump_c();
     std::string_view dump();
+
+    static std::string dumpString(std::string_view source);
 };
 
 } // namespace minion

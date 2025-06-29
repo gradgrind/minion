@@ -6,9 +6,11 @@ JSON is actually valid MINION, but not necessarily the other way round. MINION i
 
 Initial implementations (serializers and deserializers) are provided in C, C++ (currently several versions ...) and Go. The current serializers output valid JSON (which can also be read back in by the deserializers).
 
-Simple test files are included in all versions. In the C(++) versions this is main.c(pp), in the Go version this is minion_test.go.
+The Go version is now in a separate repository, [gominion](https://github.com/gradgrind/gominion).
 
-The library itself comprises only minion.c(pp) and minion.h in the C(++) versions, minion.go in the Go version.
+Simple test files are included in all versions. In the C(++) versions this is main.c(pp).
+
+The library itself comprises only minion.c(pp) and minion.h in the C(++) versions.
 
  - minion_c: State information is held in static variables. Some attention to memory management is necessary, but I have tried to keep this fairly simple and efficient. The main.c test file uses a C++ function to read a file ... I suppose I should rewrite this in C!  
 
@@ -18,7 +20,7 @@ The library itself comprises only minion.c(pp) and minion.h in the C(++) version
 
  - minion_cxx_shared: another rewrite, this time using shared_ptr.
  
-Along with the Go version, gominion, minion_cxx_shared has received the most attention. Algorithmically these two are very close to each other.
+Along with the Go version, minion_cxx_shared has received the most attention. Algorithmically these two are very close to each other.
 
 I have tried to provide helpful error messages, but no i18n is supported at present.
 
